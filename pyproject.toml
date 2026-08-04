@@ -49,6 +49,10 @@ tf-cuda = [
 onnx = [
     "onnxruntime>=1.20",
 ]
+pg_qdrant = [
+    "psycopg2-binary>=2.9,<3.0",
+    "qdrant-client>=1.9,<2.0",
+]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -15,18 +15,27 @@
 
 """Utility functions for testing."""
 
+import os
+import unittest
+
 from ml_collections import config_dict
 import numpy as np
 from perch_hoplite.db import datatypes
 from perch_hoplite.db import in_mem_impl
 from perch_hoplite.db import interface
 from perch_hoplite.db import multi_db_impl
+from perch_hoplite.db import pg_qdrant_impl
 from perch_hoplite.db import sqlite_usearch_impl
+
+# Set HOPLITE_PG_DSN to enable pg_qdrant tests, e.g.:
+#   export HOPLITE_PG_DSN="postgresql://user:pass@localhost:5432/hoplite_test"
+_PG_DSN_ENV = 'HOPLITE_PG_DSN'
 
 # DB types for testing.
 DB_TYPES = (
     'in_mem',
     'sqlite_usearch',
+    'pg_qdrant',
     'multi_db_in_mem',
     'multi_db_sqlite_usearch',
 )
@@ -38,7 +47,7 @@ DB_TYPE_NAMED_PAIRS = (
         'multi_db_sqlite_usearch',
     ),
 )
-PERSISTENT_DB_TYPES = ('sqlite_usearch', 'multi_db_sqlite_usearch')
+PERSISTENT_DB_TYPES = ('sqlite_usearch', 'multi_db_sqlite_usearch', 'pg_qdrant')
 
 CLASS_LABELS = ('alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta')
 
@@ -58,6 +67,16 @@ def make_db(
     usearch_cfg = sqlite_usearch_impl.get_default_usearch_config(embedding_dim)
     db = sqlite_usearch_impl.SQLiteUSearchDB.create(
         db_path=path, usearch_cfg=usearch_cfg
+    )
+  elif db_type == 'pg_qdrant':
+    pg_dsn = os.environ.get(_PG_DSN_ENV)
+    if not pg_dsn:
+      raise unittest.SkipTest(  # pyrefly: ignore[name-error]
+          f'Set {_PG_DSN_ENV} to run pg_qdrant tests.'
+      )
+    qdrant_cfg = pg_qdrant_impl.get_default_qdrant_config(embedding_dim)
+    db = pg_qdrant_impl.PgQdrantDB.create(
+        db_dsn=pg_dsn, qdrant_cfg=qdrant_cfg
     )
   elif db_type == 'multi_db_in_mem':
     db0 = in_mem_impl.InMemoryGraphSearchDB.create(embedding_dim=embedding_dim)
