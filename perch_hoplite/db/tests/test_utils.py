@@ -32,6 +32,8 @@ from perch_hoplite.db import sqlite_usearch_impl
 _PG_DSN_ENV = 'HOPLITE_PG_DSN'
 _QDRANT_HOST_ENV = 'HOPLITE_QDRANT_HOST'
 _QDRANT_PORT_ENV = 'HOPLITE_QDRANT_PORT'
+_QDRANT_COLLECTION_ENV = 'HOPLITE_QDRANT_COLLECTION'
+_DEFAULT_TEST_QDRANT_COLLECTION = 'hoplite_test_embeddings'
 
 # DB types for testing.
 DB_TYPES = (
@@ -78,6 +80,7 @@ def make_db(
       )
     qdrant_cfg = get_qdrant_config(embedding_dim)
     _reset_pg_qdrant_schema(pg_dsn)
+    _reset_qdrant_collection(qdrant_cfg)
     db = pg_qdrant_impl.PgQdrantDB.create(
         db_dsn=pg_dsn, qdrant_cfg=qdrant_cfg
     )
@@ -121,6 +124,15 @@ def _reset_pg_qdrant_schema(pg_dsn: str) -> None:
   conn = pg_qdrant_impl.psycopg2.connect(pg_dsn)
   try:
     cur = conn.cursor()
+    cur.execute("""
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND usename = current_user
+          AND pid <> pg_backend_pid()
+        """)
+    conn.commit()
+    cur.execute("SET lock_timeout = '5s'")
     cur.execute(
         """
         DROP TABLE IF EXISTS
@@ -140,12 +152,28 @@ def get_qdrant_config(embedding_dim: int) -> config_dict.ConfigDict:
   and ``HOPLITE_QDRANT_PORT`` (default 6333). Otherwise use in-memory Qdrant.
   """
   qdrant_cfg = pg_qdrant_impl.get_default_qdrant_config(embedding_dim)
+  qdrant_cfg.collection_name = os.environ.get(
+      _QDRANT_COLLECTION_ENV, _DEFAULT_TEST_QDRANT_COLLECTION
+  )
   qdrant_host = os.environ.get(_QDRANT_HOST_ENV)
   if qdrant_host:
     qdrant_cfg.mode = 'remote'
     qdrant_cfg.host = qdrant_host
     qdrant_cfg.port = int(os.environ.get(_QDRANT_PORT_ENV, '6333'))
   return qdrant_cfg
+
+
+def _reset_qdrant_collection(qdrant_cfg: config_dict.ConfigDict) -> None:
+  """Delete the test collection if it already exists."""
+  qc = pg_qdrant_impl._make_qdrant_client(qdrant_cfg)
+  try:
+    existing = {c.name for c in qc.get_collections().collections}
+    if qdrant_cfg.collection_name in existing:
+      qc.delete_collection(qdrant_cfg.collection_name)
+  finally:
+    close = getattr(qc, 'close', None)
+    if callable(close):
+      close()
 
 
 def insert_random_embeddings(

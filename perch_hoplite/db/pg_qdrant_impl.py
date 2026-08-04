@@ -356,6 +356,26 @@ def _create_qdrant_collection(
   )
 
 
+def _validate_qdrant_collection(
+    qc: QdrantClient, collection_name: str, embedding_dim: int
+) -> None:
+  """Check that an existing collection matches the expected vector size."""
+  collection_info = qc.get_collection(collection_name)
+  vectors_config = collection_info.config.params.vectors
+  if not isinstance(vectors_config, qmodels.VectorParams):
+    raise ValueError(
+        'Named or multi-vector Qdrant collections are not supported by'
+        f' PgQdrantDB: {collection_name}.'
+    )
+  if vectors_config.size != embedding_dim:
+    raise ValueError(
+        'Qdrant collection dimension mismatch for'
+        f" '{collection_name}': expected {embedding_dim},"
+        f' found {vectors_config.size}. Use a different collection name or'
+        ' delete the existing collection.'
+    )
+
+
 def _make_qdrant_point_struct(
     point_id: int, vector: np.ndarray
 ) -> qmodels.PointStruct:
@@ -471,10 +491,12 @@ class PgQdrantDB(interface.HopliteDBInterface):
         raise FileNotFoundError(
             f"Qdrant collection '{collection_name}' not found."
         )
+      _validate_qdrant_collection(qc, collection_name, embedding_dim)
     else:
       _create_qdrant_collection(
           qc, collection_name, embedding_dim, qdrant_cfg.metric_name
       )
+      _validate_qdrant_collection(qc, collection_name, embedding_dim)
 
     hoplite_db = cls(
         _db_dsn=db_dsn,
@@ -650,6 +672,8 @@ class PgQdrantDB(interface.HopliteDBInterface):
       self, window_ids: Sequence[int], embeddings: np.ndarray
   ) -> None:
     """Upsert a batch of embeddings into Qdrant."""
+    if len(window_ids) == 0:
+      return
     self.qc.upsert(
         collection_name=self._collection_name,
         points=[
@@ -1052,7 +1076,8 @@ class PgQdrantDB(interface.HopliteDBInterface):
     if embeddings_batch is not None:
       ids_to_upload = np.array(window_ids)[keep_idx]
       vecs_to_upload = embeddings_batch[keep_idx].astype(np.float32)
-      self._upsert_embeddings(ids_to_upload, vecs_to_upload)
+      if len(ids_to_upload) > 0:
+        self._upsert_embeddings(ids_to_upload, vecs_to_upload)
 
     return window_ids
 

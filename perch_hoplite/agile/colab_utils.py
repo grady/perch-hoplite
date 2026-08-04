@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utility functions for sqlite-backed Agile modeling notebooks."""
+"""Utility functions for Agile modeling notebooks."""
 
 import dataclasses
+import os
 
 from etils import epath
 from ml_collections import config_dict
@@ -51,6 +52,10 @@ def load_configs(
     db_path: str | None = None,
     model_config_key: str = 'perch_v2',
     db_key: str = 'sqlite_usearch',
+    db_dsn: str | None = None,
+    qdrant_host: str | None = None,
+    qdrant_port: int | None = None,
+    qdrant_collection_name: str | None = None,
 ) -> AgileConfigs:
   """Load default configs for the notebook and return them as an AgileConfigs.
 
@@ -61,6 +66,10 @@ def load_configs(
       the same directory as the audio.
     model_config_key: Name of the embedding model to use.
     db_key: The type of database to use.
+    db_dsn: PostgreSQL DSN for the pg_qdrant backend.
+    qdrant_host: Qdrant host for the pg_qdrant backend.
+    qdrant_port: Qdrant port for the pg_qdrant backend.
+    qdrant_collection_name: Qdrant collection name for the pg_qdrant backend.
 
   Returns:
     AgileConfigs object with the loaded configs.
@@ -87,6 +96,36 @@ def load_configs(
     db_config.usearch_cfg = sqlite_usearch_impl.get_default_usearch_config(
         preset_info.embedding_dim
     )
+  elif db_key == 'pg_qdrant':
+    from perch_hoplite.db import pg_qdrant_impl
+
+    if db_dsn is None:
+      db_dsn = os.environ.get('HOPLITE_PG_DSN')
+    if not db_dsn:
+      raise ValueError(
+          'db_dsn must be provided for pg_qdrant, or set HOPLITE_PG_DSN.'
+      )
+    qdrant_cfg = pg_qdrant_impl.get_default_qdrant_config(
+        preset_info.embedding_dim
+    )
+    if qdrant_collection_name:
+      qdrant_cfg.collection_name = qdrant_collection_name
+    if qdrant_host is None:
+      qdrant_host = os.environ.get('HOPLITE_QDRANT_HOST')
+    if qdrant_host:
+      qdrant_cfg.mode = 'remote'
+      qdrant_cfg.host = qdrant_host
+      qdrant_cfg.port = int(
+          qdrant_port
+          if qdrant_port is not None
+          else os.environ.get('HOPLITE_QDRANT_PORT', '6333')
+      )
+    db_config = config_dict.ConfigDict({
+        'db_dsn': db_dsn,
+        'qdrant_cfg': qdrant_cfg,
+    })
+  elif db_key != 'sqlite_usearch':
+    raise ValueError(f'Unknown db_key: {db_key}')
 
   return AgileConfigs(
       audio_sources_config=audio_sources,

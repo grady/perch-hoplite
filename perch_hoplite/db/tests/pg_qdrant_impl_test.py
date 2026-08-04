@@ -27,6 +27,10 @@ external Qdrant server, set::
     export HOPLITE_QDRANT_HOST=localhost
     export HOPLITE_QDRANT_PORT=6333
 
+Tests use a dedicated Qdrant collection name by default
+(`hoplite_test_embeddings`) so they do not collide with notebook or
+application data. Override it with ``HOPLITE_QDRANT_COLLECTION`` if needed.
+
 Tests are automatically skipped when the variable is not set.
 """
 
@@ -59,29 +63,17 @@ def _make_db(embedding_dim: int = EMBEDDING_SIZE) -> pg_qdrant_impl.PgQdrantDB:
   """Create a fresh PgQdrantDB with the configured Qdrant backend."""
   dsn = _get_dsn()
   qdrant_cfg = test_utils.get_qdrant_config(embedding_dim)
-  db = pg_qdrant_impl.PgQdrantDB.create(db_dsn=dsn, qdrant_cfg=qdrant_cfg)
-  _reset_db(db, embedding_dim)
-  return db
+  test_utils._reset_pg_qdrant_schema(dsn)
+  test_utils._reset_qdrant_collection(qdrant_cfg)
+  return pg_qdrant_impl.PgQdrantDB.create(db_dsn=dsn, qdrant_cfg=qdrant_cfg)
 
 
-def _reset_db(db: pg_qdrant_impl.PgQdrantDB, embedding_dim: int) -> None:
-  """Drop and recreate the database state for a clean test run."""
+def _reset_db(db: pg_qdrant_impl.PgQdrantDB) -> None:
+  """Clean up database state for a finished test run."""
   db.rollback()
-  cursor = db._get_cursor()
-  cursor.execute("""
-      DROP TABLE IF EXISTS
-        annotations, windows, recordings, deployments, hoplite_metadata
-      CASCADE
-      """)
-  db.db.commit()
-  existing = {c.name for c in db.qc.get_collections().collections}
-  if db._collection_name in existing:
-    db.qc.delete_collection(db._collection_name)
-  pg_qdrant_impl.PgQdrantDB._setup_tables(db._get_cursor())
-  pg_qdrant_impl._create_qdrant_collection(
-      db.qc, db._collection_name, embedding_dim, 'DOT'
-  )
-  db.commit()
+  db.db.close()
+  test_utils._reset_pg_qdrant_schema(db._db_dsn)
+  test_utils._reset_qdrant_collection(db._qdrant_cfg)
 
 
 class PgQdrantHelperTest(absltest.TestCase):
@@ -159,8 +151,7 @@ class PgQdrantDBTest(parameterized.TestCase):
 
   def tearDown(self):
     super().tearDown()
-    _reset_db(self.db, EMBEDDING_SIZE)
-    self.db.db.close()
+    _reset_db(self.db)
 
   # ------------------------------------------------------------------
   # Metadata
@@ -321,6 +312,28 @@ class PgQdrantDBTest(parameterized.TestCase):
     self.db.commit()
     self.assertLen(ids, n)
     self.assertEqual(self.db.count_embeddings(), n)
+
+  def test_insert_windows_batch_skip_all_duplicates(self):
+    rng = np.random.default_rng(33)
+    dep_id = self.db.insert_deployment(name='d', project='p')
+    rec_id = self.db.insert_recording(filename='f.wav', deployment_id=dep_id)
+    windows_batch = [
+        {'recording_id': rec_id, 'offsets': [float(i), float(i + 5)]}
+        for i in range(3)
+    ]
+    embeddings_batch = rng.normal(size=(3, EMBEDDING_SIZE)).astype(np.float32)
+    inserted_ids = self.db.insert_windows_batch(
+        windows_batch, embeddings_batch, handle_duplicates='allow'
+    )
+    self.db.commit()
+
+    skipped_ids = self.db.insert_windows_batch(
+        windows_batch, embeddings_batch, handle_duplicates='skip'
+    )
+    self.db.commit()
+
+    self.assertSequenceEqual(list(skipped_ids), list(inserted_ids))
+    self.assertEqual(self.db.count_embeddings(), 3)
 
   def test_get_embeddings_batch(self):
     rng = np.random.default_rng(4)
