@@ -272,7 +272,7 @@ def load_xc_audio(
 def load_url_audio(
     url: str, sample_rate: int, dtype: str = 'float32', resampling_type: str = 'polyphase'
 ) -> np.ndarray:
-  """Load audio from a URL using a streaming response."""
+  """Load audio from a URL."""
   with requests.get(url) as response:
     response.raise_for_status()
     sf = soundfile.SoundFile(io.BytesIO(response.content))
