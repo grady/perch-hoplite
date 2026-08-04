@@ -342,6 +342,31 @@ def _make_qdrant_client(qdrant_cfg: config_dict.ConfigDict) -> QdrantClient:
   )
 
 
+def _create_qdrant_collection(
+    qc: QdrantClient, collection_name: str, embedding_dim: int, metric_name: str
+) -> None:
+  """Create the Qdrant collection if needed."""
+  existing = {c.name for c in qc.get_collections().collections}
+  if collection_name in existing:
+    return
+  metric = getattr(qmodels.Distance, metric_name)
+  qc.create_collection(
+      collection_name=collection_name,
+      vectors_config=qmodels.VectorParams(size=embedding_dim, distance=metric),
+  )
+
+
+def _make_qdrant_point_struct(
+    point_id: int, vector: np.ndarray
+) -> qmodels.PointStruct:
+  """Build a Qdrant point from an id and vector."""
+  return qmodels.PointStruct(
+      id=int(point_id),
+      vector=vector.astype(np.float32).tolist(),
+      payload={},
+  )
+
+
 # ---------------------------------------------------------------------------
 # Main class
 # ---------------------------------------------------------------------------
@@ -440,19 +465,15 @@ class PgQdrantDB(interface.HopliteDBInterface):
 
     # Build the Qdrant client and ensure the collection exists.
     qc = _make_qdrant_client(qdrant_cfg)
-    existing = {c.name for c in qc.get_collections().collections}
-    if collection_name not in existing:
-      if readonly:
+    if readonly:
+      existing = {c.name for c in qc.get_collections().collections}
+      if collection_name not in existing:
         raise FileNotFoundError(
             f"Qdrant collection '{collection_name}' not found."
         )
-      metric = getattr(qmodels.Distance, qdrant_cfg.metric_name)
-      qc.create_collection(
-          collection_name=collection_name,
-          vectors_config=qmodels.VectorParams(
-              size=embedding_dim,
-              distance=metric,
-          ),
+    else:
+      _create_qdrant_collection(
+          qc, collection_name, embedding_dim, qdrant_cfg.metric_name
       )
 
     hoplite_db = cls(
@@ -623,6 +644,18 @@ class PgQdrantDB(interface.HopliteDBInterface):
     self.qc.delete(
         collection_name=self._collection_name,
         points_selector=qmodels.PointIdsList(points=list(window_ids)),
+    )
+
+  def _upsert_embeddings(
+      self, window_ids: Sequence[int], embeddings: np.ndarray
+  ) -> None:
+    """Upsert a batch of embeddings into Qdrant."""
+    self.qc.upsert(
+        collection_name=self._collection_name,
+        points=[
+            _make_qdrant_point_struct(window_id, embedding)
+            for window_id, embedding in zip(window_ids, embeddings)
+        ],
     )
 
   # ------------------------------------------------------------------
@@ -936,16 +969,7 @@ class PgQdrantDB(interface.HopliteDBInterface):
     window_id = row[0]
 
     if embedding is not None:
-      self.qc.upsert(
-          collection_name=self._collection_name,
-          points=[
-              qmodels.PointStruct(
-                  id=window_id,
-                  vector=embedding.astype(np.float32).tolist(),
-                  payload={},
-              )
-          ],
-      )
+      self._upsert_embeddings([window_id], embedding[None, :])
     return window_id
 
   def insert_windows_batch(
@@ -1028,17 +1052,7 @@ class PgQdrantDB(interface.HopliteDBInterface):
     if embeddings_batch is not None:
       ids_to_upload = np.array(window_ids)[keep_idx]
       vecs_to_upload = embeddings_batch[keep_idx].astype(np.float32)
-      self.qc.upsert(
-          collection_name=self._collection_name,
-          points=[
-              qmodels.PointStruct(
-                  id=int(wid),
-                  vector=vec.tolist(),
-                  payload={},
-              )
-              for wid, vec in zip(ids_to_upload, vecs_to_upload)
-          ],
-      )
+      self._upsert_embeddings(ids_to_upload, vecs_to_upload)
 
     return window_ids
 

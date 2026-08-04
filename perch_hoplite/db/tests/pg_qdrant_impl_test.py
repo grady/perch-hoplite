@@ -54,22 +54,12 @@ def _make_db(embedding_dim: int = EMBEDDING_SIZE) -> pg_qdrant_impl.PgQdrantDB:
   dsn = _get_dsn()
   qdrant_cfg = pg_qdrant_impl.get_default_qdrant_config(embedding_dim)
   db = pg_qdrant_impl.PgQdrantDB.create(db_dsn=dsn, qdrant_cfg=qdrant_cfg)
-  # Start from a clean slate.
-  _drop_all_tables(db)
-  pg_qdrant_impl.PgQdrantDB._setup_tables(db._get_cursor())
-  db.qc.create_collection(
-      collection_name=db._collection_name,
-      vectors_config=pg_qdrant_impl.qmodels.VectorParams(
-          size=embedding_dim,
-          distance=pg_qdrant_impl.qmodels.Distance.DOT,
-      ),
-  )
-  db.commit()
+  _reset_db(db, embedding_dim)
   return db
 
 
-def _drop_all_tables(db: pg_qdrant_impl.PgQdrantDB) -> None:
-  """Truncate / drop data for a clean test run."""
+def _reset_db(db: pg_qdrant_impl.PgQdrantDB, embedding_dim: int) -> None:
+  """Drop and recreate the database state for a clean test run."""
   db.rollback()
   cursor = db._get_cursor()
   cursor.execute("""
@@ -78,10 +68,14 @@ def _drop_all_tables(db: pg_qdrant_impl.PgQdrantDB) -> None:
       CASCADE
       """)
   db.db.commit()
-  # Clear Qdrant collection if it exists.
   existing = {c.name for c in db.qc.get_collections().collections}
   if db._collection_name in existing:
     db.qc.delete_collection(db._collection_name)
+  pg_qdrant_impl.PgQdrantDB._setup_tables(db._get_cursor())
+  pg_qdrant_impl._create_qdrant_collection(
+      db.qc, db._collection_name, embedding_dim, 'DOT'
+  )
+  db.commit()
 
 
 class PgQdrantHelperTest(absltest.TestCase):
@@ -159,7 +153,7 @@ class PgQdrantDBTest(parameterized.TestCase):
 
   def tearDown(self):
     super().tearDown()
-    _drop_all_tables(self.db)
+    _reset_db(self.db, EMBEDDING_SIZE)
     self.db.db.close()
 
   # ------------------------------------------------------------------
