@@ -78,12 +78,6 @@ source .venv/bin/activate
 uv pip install -e .
 ```
 
-If you want the PostgreSQL + Qdrant database backend, install the optional
-dependencies too:
-```bash
-uv pip install -e '.[pg_qdrant]'
-```
-
 ### With `pip`
 
 You can install the latest stable release from PyPI:
