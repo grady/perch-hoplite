@@ -16,6 +16,7 @@
 """Audio IO utilities."""
 
 import concurrent
+import io
 import itertools
 import logging
 import os
@@ -62,7 +63,7 @@ def load_audio_file(
     with filepath.open('rb') as f:
       sf = soundfile.SoundFile(file=f)
       audio = sf.read()
-      if target_sample_rate is not None:
+      if target_sample_rate is not None and target_sample_rate != sf.samplerate:
         audio = librosa.resample(
             y=audio,
             orig_sr=sf.samplerate,
@@ -125,7 +126,7 @@ def load_audio_window_soundfile(
   if len(a.shape) == 2:
     # Downstream ops expect mono audio, so reduce to mono.
     a = a[:, 0]
-  if sample_rate > 0:
+  if sample_rate > 0 and sample_rate != sf.samplerate:
     a = librosa.resample(
         y=a, orig_sr=sf.samplerate, target_sr=sample_rate, res_type='polyphase'
     )
@@ -266,17 +267,23 @@ def load_xc_audio(
   os.unlink(f.name)
   return audio.astype(dtype)
 
-
+## the old code here saved to a temporary file without extension, which made a lot of the 
+## other code paths useless, so lets just go directly to soundfile. 
 def load_url_audio(
-    url: str, sample_rate: int, dtype: str = 'float32'
+    url: str, sample_rate: int, dtype: str = 'float32', resampling_type: str = 'polyphase'
 ) -> np.ndarray:
-  """Load audio from a URL."""
-  data = requests.get(url).content
-  with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
-    f.write(data)
-    f.flush()
-  audio = load_audio_file(f.name, target_sample_rate=sample_rate)
-  os.unlink(f.name)
+  """Load audio from a URL using a streaming response."""
+  with requests.get(url) as response:
+    response.raise_for_status()
+    sf = soundfile.SoundFile(io.BytesIO(response.content))
+    audio = sf.read()
+    if sample_rate > 0 and sample_rate != sf.samplerate:
+      audio = librosa.resample(
+          y=audio,
+          orig_sr=sf.samplerate,
+          target_sr=sample_rate,
+          res_type=resampling_type,
+      )
   return audio.astype(dtype)
 
 
