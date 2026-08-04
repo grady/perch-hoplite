@@ -15,11 +15,17 @@
 
 """Integration tests for the PostgreSQL + Qdrant database implementation.
 
-These tests require a live PostgreSQL instance.  Set the environment variable
+These tests require a live PostgreSQL instance. Set the environment variable
 ``HOPLITE_PG_DSN`` to a valid DSN before running, for example::
 
     export HOPLITE_PG_DSN="postgresql://user:pass@localhost:5432/hoplite_test"
     python -m pytest perch_hoplite/db/tests/pg_qdrant_impl_test.py
+
+By default the tests use an in-memory Qdrant instance. To point them at an
+external Qdrant server, set::
+
+    export HOPLITE_QDRANT_HOST=localhost
+    export HOPLITE_QDRANT_PORT=6333
 
 Tests are automatically skipped when the variable is not set.
 """
@@ -50,9 +56,9 @@ def _get_dsn() -> str:
 
 
 def _make_db(embedding_dim: int = EMBEDDING_SIZE) -> pg_qdrant_impl.PgQdrantDB:
-  """Create a fresh PgQdrantDB with an in-memory Qdrant client."""
+  """Create a fresh PgQdrantDB with the configured Qdrant backend."""
   dsn = _get_dsn()
-  qdrant_cfg = pg_qdrant_impl.get_default_qdrant_config(embedding_dim)
+  qdrant_cfg = test_utils.get_qdrant_config(embedding_dim)
   db = pg_qdrant_impl.PgQdrantDB.create(db_dsn=dsn, qdrant_cfg=qdrant_cfg)
   _reset_db(db, embedding_dim)
   return db

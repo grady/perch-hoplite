@@ -30,6 +30,8 @@ from perch_hoplite.db import sqlite_usearch_impl
 # Set HOPLITE_PG_DSN to enable pg_qdrant tests, e.g.:
 #   export HOPLITE_PG_DSN="postgresql://user:pass@localhost:5432/hoplite_test"
 _PG_DSN_ENV = 'HOPLITE_PG_DSN'
+_QDRANT_HOST_ENV = 'HOPLITE_QDRANT_HOST'
+_QDRANT_PORT_ENV = 'HOPLITE_QDRANT_PORT'
 
 # DB types for testing.
 DB_TYPES = (
@@ -74,7 +76,8 @@ def make_db(
       raise unittest.SkipTest(  # pyrefly: ignore[name-error]
           f'Set {_PG_DSN_ENV} to run pg_qdrant tests.'
       )
-    qdrant_cfg = pg_qdrant_impl.get_default_qdrant_config(embedding_dim)
+    qdrant_cfg = get_qdrant_config(embedding_dim)
+    _reset_pg_qdrant_schema(pg_dsn)
     db = pg_qdrant_impl.PgQdrantDB.create(
         db_dsn=pg_dsn, qdrant_cfg=qdrant_cfg
     )
@@ -111,6 +114,38 @@ def make_db(
     db.insert_metadata('model_config', model_config)
   db.commit()
   return db
+
+
+def _reset_pg_qdrant_schema(pg_dsn: str) -> None:
+  """Drop the Hoplite schema so a pg_qdrant test starts clean."""
+  conn = pg_qdrant_impl.psycopg2.connect(pg_dsn)
+  try:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        DROP TABLE IF EXISTS
+          annotations, windows, recordings, deployments, hoplite_metadata
+        CASCADE
+        """
+    )
+    conn.commit()
+  finally:
+    conn.close()
+
+
+def get_qdrant_config(embedding_dim: int) -> config_dict.ConfigDict:
+  """Return the Qdrant config for tests.
+
+  If ``HOPLITE_QDRANT_HOST`` is set, use a remote Qdrant server at that host
+  and ``HOPLITE_QDRANT_PORT`` (default 6333). Otherwise use in-memory Qdrant.
+  """
+  qdrant_cfg = pg_qdrant_impl.get_default_qdrant_config(embedding_dim)
+  qdrant_host = os.environ.get(_QDRANT_HOST_ENV)
+  if qdrant_host:
+    qdrant_cfg.mode = 'remote'
+    qdrant_cfg.host = qdrant_host
+    qdrant_cfg.port = int(os.environ.get(_QDRANT_PORT_ENV, '6333'))
+  return qdrant_cfg
 
 
 def insert_random_embeddings(

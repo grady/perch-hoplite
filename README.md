@@ -78,6 +78,12 @@ source .venv/bin/activate
 uv pip install -e .
 ```
 
+If you want the PostgreSQL + Qdrant database backend, install the optional
+dependencies too:
+```bash
+uv pip install -e '.[pg_qdrant]'
+```
+
 ### With `pip`
 
 You can install the latest stable release from PyPI:
@@ -97,6 +103,20 @@ python -m unittest discover -s perch_hoplite/db/tests -p "*test.py"
 python -m unittest discover -s perch_hoplite/taxonomy -p "*test.py"
 python -m unittest discover -s perch_hoplite/zoo -p "*test.py"
 python -m unittest discover -s perch_hoplite/agile/tests -p "*test.py"
+```
+
+The database tests support three backends:
+- in-memory / SQLite + USearch tests run by default
+- PostgreSQL + Qdrant tests run when `HOPLITE_PG_DSN` is set
+- external Qdrant can be selected with `HOPLITE_QDRANT_HOST` and
+  `HOPLITE_QDRANT_PORT` (default `6333`)
+
+Example:
+```bash
+export HOPLITE_PG_DSN="postgresql://user:pass@host:5432/hoplite_test"
+export HOPLITE_QDRANT_HOST=localhost
+export HOPLITE_QDRANT_PORT=6333
+python -m unittest perch_hoplite.db.tests.pg_qdrant_impl_test -v
 ```
 
 ### Notes on Dependencies
@@ -126,6 +146,11 @@ pip install 'perch-hoplite[jax]'
 ```
 If installing with uv in editable mode, you can use
 `uv pip install -e '.[tf,jax]'`.
+
+For PostgreSQL + Qdrant support:
+```bash
+uv pip install -e '.[pg_qdrant]'
+```
 
 ## Disclaimer
 
