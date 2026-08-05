@@ -35,7 +35,6 @@ class SourceId:
   shard_len_s: float
   filepath: str
   sample_rate_hz: int
-  cache_local_audio: bool = False
 
   def to_id(self):
     return f'{self.dataset_name}:{self.file_id}:{self.offset_s}'
@@ -71,7 +70,6 @@ class AudioSourceConfig(datatypes.HopliteConfig):
   target_sample_rate_hz: int = -2
   shard_len_s: float | None = 60.0
   max_shards_per_file: int | None = None
-  cache_local_audio: bool = False
 
   def is_compatible(self, other: 'AudioSourceConfig') -> bool:
     """Returns True if other is expected to produce comparable embeddings."""
@@ -136,14 +134,14 @@ class AudioSources(datatypes.HopliteConfig):
     return AudioSources(tuple(other_globs.values()))
 
   def _get_audio_len_s_and_sample_rate_hz(
-      self, filepath: epath.Path, cache_local_audio: bool = False
+      self, filepath: epath.Path
   ) -> tuple[float, int]:
     """Returns the audio length and sample rate of the audio file."""
     filepath_posix = filepath.as_posix()
     if filepath_posix in self._file_info_cache:
       return self._file_info_cache[filepath_posix]
     audio_len_s, sample_rate_hz = audio_io.get_file_length_s_and_sample_rate(
-        filepath_posix, cache_local_audio=cache_local_audio
+        filepath_posix
     )
     self._file_info_cache[filepath_posix] = (audio_len_s, sample_rate_hz)
     return audio_len_s, sample_rate_hz
@@ -175,7 +173,7 @@ class AudioSources(datatypes.HopliteConfig):
       for filepath in tqdm.tqdm(filepaths):
         file_id = filepath.as_posix()[len(base_path.as_posix()) + 1 :]
         audio_len_s, sample_rate_hz = self._get_audio_len_s_and_sample_rate_hz(
-            filepath, cache_local_audio=glob.cache_local_audio
+            filepath
         )
         if shard_len_s is None:
           yield SourceId(
@@ -185,7 +183,6 @@ class AudioSources(datatypes.HopliteConfig):
               shard_len_s=-1,
               filepath=filepath.as_posix(),
               sample_rate_hz=sample_rate_hz,
-              cache_local_audio=glob.cache_local_audio,
           )
           continue
 
@@ -211,6 +208,5 @@ class AudioSources(datatypes.HopliteConfig):
               shard_len_s=shard_len_s,
               filepath=filepath.as_posix(),
               sample_rate_hz=sample_rate_hz,
-              cache_local_audio=glob.cache_local_audio,
           )
           shard_num += 1

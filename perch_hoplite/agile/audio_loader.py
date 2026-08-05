@@ -49,18 +49,13 @@ def make_filepath_loader(
 
   def loader(source_id: str, offset_s: float) -> np.ndarray:
     found_path = None
-    found_audio_source = None
     for audio_source in audio_sources.audio_globs:
       path = epath.Path(audio_source.base_path) / source_id
       if path.exists():
         found_path = path
-        found_audio_source = audio_source
         break
     if found_path is None:
       raise ValueError('No audio path found for source_id: ', source_id)
-    cache_local_audio = cache_local_audio or (
-        found_audio_source.cache_local_audio if found_audio_source else False
-    )
     return np.array(
         audio_io.load_audio_window(
             found_path.as_posix(),
