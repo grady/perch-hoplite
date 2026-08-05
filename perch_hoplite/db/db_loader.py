@@ -15,15 +15,16 @@
 
 """Database configuration and constructor."""
 
+from __future__ import annotations
+
 import dataclasses
 
 from etils import epath
 from ml_collections import config_dict
 from perch_hoplite.db import datatypes
-from perch_hoplite.db import in_mem_impl
 from perch_hoplite.db import interface
-from perch_hoplite.db import pg_qdrant_impl
-from perch_hoplite.db import sqlite_usearch_impl
+
+
 import tqdm
 
 
@@ -42,10 +43,13 @@ class DBConfig(datatypes.HopliteConfig):
   def load_db(self) -> interface.HopliteDBInterface:
     """Load the database from the specified path."""
     if self.db_key == 'sqlite_usearch':
+      from perch_hoplite.db import sqlite_usearch_impl
       return sqlite_usearch_impl.SQLiteUSearchDB.create(**self.db_config)  # pyrefly: ignore[bad-unpacking, missing-argument]
     elif self.db_key == 'in_mem':
+      from perch_hoplite.db import in_mem_impl
       return in_mem_impl.InMemoryGraphSearchDB.create(**self.db_config)  # pyrefly: ignore[bad-unpacking, missing-argument]
     elif self.db_key == 'pg_qdrant':
+      from perch_hoplite.db import pg_qdrant_impl
       return pg_qdrant_impl.PgQdrantDB.create(**self.db_config)  # pyrefly: ignore[bad-unpacking, missing-argument]
     else:
       raise ValueError(f'Unknown db_key: {self.db_key}')
@@ -121,6 +125,7 @@ def create_new_usearch_db(
     embedding_dim: int,
 ) -> sqlite_usearch_impl.SQLiteUSearchDB:
   """Create a new USearch DB with the given path and embedding dimension."""
+  from perch_hoplite.db import sqlite_usearch_impl
   epath.Path(db_path).parent.mkdir(parents=True, exist_ok=True)
   usearch_cfg = sqlite_usearch_impl.get_default_usearch_config(embedding_dim)
   return sqlite_usearch_impl.SQLiteUSearchDB.create(
