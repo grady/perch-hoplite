@@ -119,6 +119,37 @@ class AudioIoTest(absltest.TestCase):
     )
     self.assertEqual(_CountingRequestHandler.request_count, 3)
 
+  def test_local_audio_can_be_cached_optionally(self):
+    test_utils.make_wav_files(
+        self.tempdir, classes=['pos'], filenames=['foo'], file_len_s=2.0
+    )
+    filepath = os.path.join(self.tempdir, 'pos', 'foo_pos.wav')
+
+    audio = audio_io.load_audio_window(
+        filepath,
+        offset_s=0.0,
+        sample_rate=16000,
+        window_size_s=1.0,
+        cache_local_audio=True,
+    )
+    self.assertEqual(audio.shape[0], 16000)
+    file_length_s, sample_rate = audio_io.get_file_length_s_and_sample_rate(
+        filepath, cache_local_audio=True
+    )
+    self.assertEqual(sample_rate, 16000)
+    self.assertAlmostEqual(file_length_s, 2.0, places=3)
+
+    os.unlink(filepath)
+
+    audio_2 = audio_io.load_audio_window(
+        filepath,
+        offset_s=0.5,
+        sample_rate=16000,
+        window_size_s=1.0,
+        cache_local_audio=True,
+    )
+    self.assertEqual(audio_2.shape[0], 16000)
+
 
 if __name__ == '__main__':
   absltest.main()

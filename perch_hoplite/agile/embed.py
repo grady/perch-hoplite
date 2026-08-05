@@ -141,6 +141,7 @@ class EmbedWorker:
       db: hoplite_interface.HopliteDBInterface,
       embedding_model: zoo_interface.EmbeddingModel | None = None,
       audio_worker_threads: int = 8,
+      cache_local_audio: bool = False,
       timestamp_resolver: ts_resolver.TimestampResolver | None = None,
       timestamp_file_pattern: str | None = None,
   ):
@@ -148,6 +149,7 @@ class EmbedWorker:
     self.model_config = model_config
     self.audio_sources = audio_sources
     self.audio_worker_threads = audio_worker_threads
+    self.cache_local_audio = cache_local_audio
     self.timestamp_file_pattern = timestamp_file_pattern
     if timestamp_resolver is None:
       if self.timestamp_file_pattern is not None:
@@ -498,9 +500,7 @@ class EmbedWorker:
         initializer=worker_initializer,
         initargs=(state,),
     ) as executor:
-      source_iterator = self.audio_sources.iterate_all_sources(
-          target_dataset_name
-      )
+      source_iterator = self.audio_sources.iterate_all_sources(target_dataset_name)
       for source_ids_batch in batched(source_iterator, batch_size):
         recording_timestamps = [
             self.get_recording_timestamp(s.file_id, s.dataset_name)
@@ -577,6 +577,7 @@ class EmbedWorker:
           offset_s=source_id.offset_s,
           sample_rate=target_sample_rate_hz,
           window_size_s=source_id.shard_len_s,
+          cache_local_audio=self.cache_local_audio,
       )
       return np.array(audio_array)
     except soundfile.LibsndfileError as inst:

@@ -46,6 +46,7 @@ class SourceInfoTest(absltest.TestCase):
                 dataset_name='pos',
                 base_path=self.tempdir,
                 file_glob='pos/*.wav',
+                cache_local_audio=True,
             ),
             source_info.AudioSourceConfig(
                 dataset_name='neg',
@@ -58,6 +59,7 @@ class SourceInfoTest(absltest.TestCase):
     with self.subTest('no_sharding'):
       shard_ids = tuple(audio_sources.iterate_all_sources())
       self.assertLen(shard_ids, len(classes) * len(filenames))
+      self.assertTrue(shard_ids[0].cache_local_audio)
 
     audio_sources.audio_globs[0].shard_len_s = 2.0
     audio_sources.audio_globs[1].shard_len_s = 2.0

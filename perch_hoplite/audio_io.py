@@ -49,8 +49,8 @@ class _CachedAudioEntry:
   size_bytes: int
 
 
-class _UrlAudioCache:
-  """Thread-safe LRU cache for URL-backed audio artifacts."""
+class _AudioArtifactCache:
+  """Thread-safe LRU cache for downloaded or locally materialized audio."""
 
   def __init__(self, max_entries: int = 4, max_bytes: int = 2 * 1024**3):
     self.max_entries = max_entries
@@ -110,32 +110,40 @@ class _UrlAudioCache:
       key = next(iter(self._entries))
       self._remove_entry(key)
 
-  def _download_source(self, url: str) -> str:
-    parsed = urlparse(url)
-    response = requests.get(url)
-    response.raise_for_status()
-    content_type = response.headers.get('content-type', '').split(';')[0]
-    suffix = (
-        epath.Path(parsed.path).suffix
-        or mimetypes.guess_extension(content_type or '')
-        or '.bin'
-    )
+  def _materialize_source(self, source: str) -> str:
+    parsed = urlparse(source)
+    if _is_http_url(source):
+      response = requests.get(source)
+      response.raise_for_status()
+      content_type = response.headers.get('content-type', '').split(';')[0]
+      suffix = (
+          epath.Path(parsed.path).suffix
+          or mimetypes.guess_extension(content_type or '')
+          or '.bin'
+      )
+      source_bytes = response.content
+    else:
+      suffix = epath.Path(source).suffix or '.bin'
+      with epath.Path(source).open('rb') as f:
+        source_bytes = f.read()
     with tempfile.NamedTemporaryFile(
         mode='wb', suffix=suffix, dir=self._cache_dir, delete=False
     ) as f:
-      f.write(response.content)
+      f.write(source_bytes)
       return f.name
 
-  def _build_native_entry(self, url: str, resampling_type: str) -> _CachedAudioEntry:
-    raw_path = self._download_source(url)
+  def _build_native_entry(
+      self, source: str, resampling_type: str
+  ) -> _CachedAudioEntry:
+    raw_path = self._materialize_source(source)
     try:
       duration_s, native_sr = get_file_length_s_and_sample_rate(raw_path)
       if duration_s < 0 or native_sr <= 0:
-        raise ValueError(f'Failed to determine audio metadata for {url}.')
+        raise ValueError(f'Failed to determine audio metadata for {source}.')
       audio = load_audio_file(
           raw_path, target_sample_rate=native_sr, resampling_type=resampling_type
       )
-      key = self._cache_key(url, -1, resampling_type)
+      key = self._cache_key(source, -1, resampling_type)
       cache_path = self._cache_path(key)
       tmp_path = cache_path.parent / f'{cache_path.name}.tmp.wav'
       soundfile.write(tmp_path.as_posix(), audio, native_sr, format='WAV')
@@ -155,7 +163,7 @@ class _UrlAudioCache:
 
   def _build_resampled_entry(
       self,
-      url: str,
+      source: str,
       resampling_type: str,
       target_sample_rate: int,
       native_entry: _CachedAudioEntry,
@@ -165,7 +173,7 @@ class _UrlAudioCache:
         target_sample_rate=target_sample_rate,
         resampling_type=resampling_type,
     )
-    key = self._cache_key(url, target_sample_rate, resampling_type)
+    key = self._cache_key(source, target_sample_rate, resampling_type)
     cache_path = self._cache_path(key)
     tmp_path = cache_path.parent / f'{cache_path.name}.tmp.wav'
     soundfile.write(
@@ -182,9 +190,9 @@ class _UrlAudioCache:
     )
 
   def _ensure_entry(
-      self, url: str, sample_rate: int, resampling_type: str
+      self, source: str, sample_rate: int, resampling_type: str
   ) -> _CachedAudioEntry:
-    key = self._cache_key(url, sample_rate, resampling_type)
+    key = self._cache_key(source, sample_rate, resampling_type)
     lock = self._get_key_lock(key)
     with lock:
       with self._lock:
@@ -193,13 +201,13 @@ class _UrlAudioCache:
           self._entries.move_to_end(key)
           return entry
       if sample_rate <= 0:
-        entry = self._build_native_entry(url, resampling_type)
+        entry = self._build_native_entry(source, resampling_type)
       else:
-        native_entry = self._ensure_entry(url, -1, resampling_type)
+        native_entry = self._ensure_entry(source, -1, resampling_type)
         if sample_rate == native_entry.sample_rate:
           return native_entry
         entry = self._build_resampled_entry(
-            url, resampling_type, sample_rate, native_entry
+            source, resampling_type, sample_rate, native_entry
         )
       with self._lock:
         self._entries[key] = entry
@@ -207,38 +215,53 @@ class _UrlAudioCache:
         self._evict_if_needed()
       return entry
 
-  def get_local_path(self, url: str, sample_rate: int, resampling_type: str) -> str:
-    return self._ensure_entry(url, sample_rate, resampling_type).path
+  def get_local_path(
+      self, source: str, sample_rate: int, resampling_type: str
+  ) -> str:
+    return self._ensure_entry(source, sample_rate, resampling_type).path
 
-  def get_native_info(self, url: str, resampling_type: str) -> tuple[float, int]:
-    entry = self._ensure_entry(url, -1, resampling_type)
+  def get_native_info(self, source: str, resampling_type: str) -> tuple[float, int]:
+    entry = self._ensure_entry(source, -1, resampling_type)
     return entry.duration_s, entry.sample_rate
 
 
-_URL_AUDIO_CACHE: _UrlAudioCache | None = None
+_URL_AUDIO_CACHE: _AudioArtifactCache | None = None
 _URL_AUDIO_CACHE_LOCK = threading.Lock()
 
 
 def configure_url_audio_cache(
     max_entries: int = 4, max_bytes: int = 2 * 1024**3
-) -> _UrlAudioCache:
+) -> _AudioArtifactCache:
   """Reset the URL audio cache with explicit limits."""
   global _URL_AUDIO_CACHE
   with _URL_AUDIO_CACHE_LOCK:
     if _URL_AUDIO_CACHE is not None:
       _URL_AUDIO_CACHE.close()
-    _URL_AUDIO_CACHE = _UrlAudioCache(
+    _URL_AUDIO_CACHE = _AudioArtifactCache(
         max_entries=max_entries, max_bytes=max_bytes
     )
     return _URL_AUDIO_CACHE
 
 
-def get_url_audio_cache() -> _UrlAudioCache:
+def get_url_audio_cache() -> _AudioArtifactCache:
   global _URL_AUDIO_CACHE
   with _URL_AUDIO_CACHE_LOCK:
     if _URL_AUDIO_CACHE is None:
-      _URL_AUDIO_CACHE = _UrlAudioCache()
+      _URL_AUDIO_CACHE = _AudioArtifactCache()
     return _URL_AUDIO_CACHE
+
+
+def _resolve_cached_audio_path(
+    filepath: str,
+    sample_rate: int,
+    resampling_type: str,
+    cache_local_audio: bool,
+) -> str:
+  if _is_http_url(filepath) or cache_local_audio:
+    return get_url_audio_cache().get_local_path(
+        filepath, sample_rate=sample_rate, resampling_type=resampling_type
+    )
+  return filepath
 
 
 def close_url_audio_cache() -> None:
@@ -256,6 +279,7 @@ def load_audio(
     path: epath.PathLike,
     target_sample_rate: int,
     dtype: str = 'float32',
+    cache_local_audio: bool = False,
     **kwargs,
 ) -> np.ndarray:
   """Load a general audio resource."""
@@ -265,7 +289,13 @@ def load_audio(
   elif _is_http_url(path):
     return load_url_audio(path, target_sample_rate, dtype=dtype)
   else:
-    return load_audio_file(path, target_sample_rate, dtype=dtype, **kwargs)
+    return load_audio_file(
+        path,
+        target_sample_rate,
+        dtype=dtype,
+        cache_local_audio=cache_local_audio,
+        **kwargs,
+    )
 
 
 def load_audio_file(
@@ -273,6 +303,7 @@ def load_audio_file(
     target_sample_rate: int,
     resampling_type: str = 'polyphase',
     dtype: str = 'float32',
+    cache_local_audio: bool = False,
 ) -> np.ndarray:
   """Read an audio file, and resample it using librosa."""
   filepath = os.fspath(filepath)
@@ -283,6 +314,9 @@ def load_audio_file(
         dtype=dtype,
         resampling_type=resampling_type,
     )
+  filepath = _resolve_cached_audio_path(
+      filepath, target_sample_rate, resampling_type, cache_local_audio
+  )
   filepath = epath.Path(filepath)
   if target_sample_rate <= 0:
     # Use the native sample rate.
@@ -341,10 +375,6 @@ def load_audio_window_soundfile(
   Returns:
     Numpy array of loaded audio.
   """
-  if _is_http_url(filepath):
-    filepath = get_url_audio_cache().get_local_path(
-        filepath, sample_rate=sample_rate, resampling_type='polyphase'
-    )
   with epath.Path(filepath).open('rb') as f:
     sf = soundfile.SoundFile(f)
     if offset_s > 0:
@@ -371,17 +401,21 @@ def load_audio_window(
     sample_rate: int,
     window_size_s: float,
     dtype: str = 'float32',
+    cache_local_audio: bool = False,
 ) -> np.ndarray:
   """Load a slice of audio from a file, hopefully efficiently."""
 
-  if _is_http_url(filepath):
-    filepath = get_url_audio_cache().get_local_path(
-        filepath, sample_rate=sample_rate, resampling_type='polyphase'
-    )
+  filepath = _resolve_cached_audio_path(
+      filepath, sample_rate, 'polyphase', cache_local_audio
+  )
   if expect_soundfile_compatibility(filepath):
     try:
       return load_audio_window_soundfile(
-          filepath, offset_s, sample_rate, window_size_s, dtype
+          filepath,
+          offset_s,
+          sample_rate,
+          window_size_s,
+          dtype,
       )
     except soundfile.LibsndfileError:
       logging.info('Failed to load audio with libsndfile: %s', filepath)
@@ -398,7 +432,9 @@ def load_audio_window(
 
   # This fail-over is much slower but more reliable; the entire audio file
   # is loaded (and possibly resampled) and then we extract the target audio.
-  audio = load_audio(filepath, sample_rate)
+  audio = load_audio(
+      filepath, sample_rate, dtype=dtype, cache_local_audio=cache_local_audio
+  )
   offset = int(offset_s * sample_rate)
   window_size = int(window_size_s * sample_rate)
   return audio[offset : offset + window_size].astype(dtype)
@@ -521,12 +557,17 @@ def load_url_audio(
   )
 
 
-def get_file_length_s_and_sample_rate(filepath: str) -> tuple[float, int]:
+def get_file_length_s_and_sample_rate(
+    filepath: str, cache_local_audio: bool = False
+) -> tuple[float, int]:
   """As it says on the tin, or (-1, -1) if unparseable."""
   if _is_http_url(filepath):
     return get_url_audio_cache().get_native_info(
         filepath, resampling_type='polyphase'
     )
+  filepath = _resolve_cached_audio_path(
+      filepath, -1, 'polyphase', cache_local_audio
+  )
   if expect_soundfile_compatibility(filepath):
     try:
       with epath.Path(filepath).open('rb') as f:
