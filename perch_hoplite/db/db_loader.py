@@ -18,13 +18,16 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import TYPE_CHECKING
 
 from etils import epath
 from ml_collections import config_dict
 from perch_hoplite.db import datatypes
 from perch_hoplite.db import interface
 
-
+if TYPE_CHECKING:
+  from perch_hoplite.db import sqlite_usearch_impl
+  
 import tqdm
 
 
