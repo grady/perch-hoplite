@@ -124,7 +124,7 @@ def load_configs(
         'db_dsn': db_dsn,
         'qdrant_cfg': qdrant_cfg,
     })
-  elif db_key != 'sqlite_usearch':
+  elif db_key is not None:
     raise ValueError(f'Unknown db_key: {db_key}')
 
   return AgileConfigs(
