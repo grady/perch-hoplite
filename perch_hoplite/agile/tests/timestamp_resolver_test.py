@@ -83,6 +83,17 @@ class TimestampResolverTest(parameterized.TestCase):
     self.assertEqual(filepath, epath.Path('/abs/path/file.wav'))
 
   @parameterized.parameters('in_mem', 'sqlite_usearch')
+  def test_get_recording_filepath_remote_uri(self, db_type):
+    db = self.get_db(db_type)
+    resolver = ExampleTimestampResolver(db=db)
+
+    recording = datatypes.Recording(
+        id=1, filename='s3://bucket/path/file.wav', deployment_id=1
+    )
+    filepath = resolver.get_recording_filepath(recording)
+    self.assertEqual(filepath, epath.Path('s3://bucket/path/file.wav'))
+
+  @parameterized.parameters('in_mem', 'sqlite_usearch')
   def test_get_recording_filepath_base_path(self, db_type):
     db = self.get_db(db_type)
     # Setup resolver with base path
@@ -93,13 +104,27 @@ class TimestampResolverTest(parameterized.TestCase):
     self.assertEqual(filepath, epath.Path('/base/dir/file.wav'))
 
   @parameterized.parameters('in_mem', 'sqlite_usearch')
-  def test_get_recording_filepath_audio_sources_metadata(self, db_type):
+  def test_get_recording_filepath_s3_base_path(self, db_type):
+    db = self.get_db(db_type)
+    resolver = ExampleTimestampResolver(db=db, base_path='s3://base/dir')
+
+    recording = datatypes.Recording(id=1, filename='file.wav', deployment_id=1)
+    filepath = resolver.get_recording_filepath(recording)
+    self.assertEqual(filepath, epath.Path('s3://base/dir/file.wav'))
+
+  @parameterized.parameters(
+      ('in_mem', 'gs://metadata/base'),
+      ('in_mem', 's3://metadata/base'),
+      ('sqlite_usearch', 'gs://metadata/base'),
+      ('sqlite_usearch', 's3://metadata/base'),
+  )
+  def test_get_recording_filepath_audio_sources_metadata(self, db_type, base_path):
     db = self.get_db(db_type)
     # Store audio_sources metadata in DB
     embed_config = config_dict.ConfigDict(
         {
             'audio_globs': [
-                {'base_path': 'gs://metadata/base'},
+                {'base_path': base_path},
             ]
         }
     )
@@ -108,7 +133,7 @@ class TimestampResolverTest(parameterized.TestCase):
     resolver = ExampleTimestampResolver(db=db)
     recording = datatypes.Recording(id=1, filename='song.wav', deployment_id=1)
     filepath = resolver.get_recording_filepath(recording)
-    self.assertEqual(filepath, epath.Path('gs://metadata/base/song.wav'))
+    self.assertEqual(filepath, epath.Path(f'{base_path}/song.wav'))
 
   @parameterized.parameters('in_mem', 'sqlite_usearch')
   def test_get_offset_timestamp(self, db_type):

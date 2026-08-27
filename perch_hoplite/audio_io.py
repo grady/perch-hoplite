@@ -41,6 +41,88 @@ def _is_http_url(path: str) -> bool:
   return path.startswith(('http://', 'https://'))
 
 
+def _is_s3_url(path: str) -> bool:
+  return path.startswith('s3://')
+
+
+def _is_remote_audio_path(path: str) -> bool:
+  return _is_http_url(path) or _is_s3_url(path)
+
+
+def _str_to_bool(value: str | None, default: bool) -> bool:
+  if value is None:
+    return default
+  return value.strip().lower() not in ('0', 'false', 'no', 'off')
+
+
+def _normalize_s3_endpoint(endpoint: str, use_ssl: bool) -> str:
+  """Normalizes S3 endpoint URL scheme based on use_ssl setting."""
+  endpoint = endpoint.strip()
+  if endpoint.startswith('http://'):
+    return endpoint if not use_ssl else 'https://' + endpoint[len('http://') :]
+  if endpoint.startswith('https://'):
+    return endpoint if use_ssl else 'http://' + endpoint[len('https://') :]
+  scheme = 'https://' if use_ssl else 'http://'
+  return scheme + endpoint
+
+
+def _s3_storage_options_from_env() -> dict[str, object]:
+  """Builds boto3 S3 client options from environment variables."""
+  endpoint = os.environ.get('HOPLITE_S3_ENDPOINT')
+  access_key = os.environ.get('HOPLITE_S3_ACCESS_KEY')
+  secret_key = os.environ.get('HOPLITE_S3_SECRET_KEY')
+  session_token = os.environ.get('HOPLITE_S3_SESSION_TOKEN')
+  region = os.environ.get('HOPLITE_S3_REGION')
+  use_ssl = _str_to_bool(os.environ.get('HOPLITE_S3_USE_SSL'), default=True)
+  verify = os.environ.get('HOPLITE_S3_VERIFY')
+
+  storage_options: dict[str, object] = {}
+  if endpoint:
+    storage_options['endpoint_url'] = _normalize_s3_endpoint(endpoint, use_ssl)
+  if region:
+    storage_options['region_name'] = region
+  if access_key:
+    storage_options['aws_access_key_id'] = access_key
+  if secret_key:
+    storage_options['aws_secret_access_key'] = secret_key
+  if session_token:
+    storage_options['aws_session_token'] = session_token
+  storage_options['use_ssl'] = use_ssl
+  if verify is not None:
+    lower_verify = verify.strip().lower()
+    if lower_verify in ('0', 'false', 'no', 'off'):
+      storage_options['verify'] = False
+    elif lower_verify in ('1', 'true', 'yes', 'on'):
+      storage_options['verify'] = True
+    else:
+      storage_options['verify'] = verify
+
+  return storage_options
+
+
+def _read_s3_object_bytes(source: str) -> tuple[bytes, str]:
+  """Reads S3 object bytes and content type from an s3:// URI."""
+  parsed = urlparse(source)
+  bucket = parsed.netloc
+  key = parsed.path.lstrip('/')
+  if not bucket or not key:
+    raise ValueError(
+        f'Invalid S3 URI: {source}. Expected format s3://<bucket>/<key>.'
+    )
+  try:
+    import boto3
+  except ImportError as exc:
+    raise ImportError('S3 support requires installing boto3.') from exc
+
+  s3_client = boto3.client('s3', **_s3_storage_options_from_env())
+  response = s3_client.get_object(Bucket=bucket, Key=key)
+  content_type = response.get('ContentType', '')
+  body = response['Body']
+  source_bytes = body.read()
+  body.close()
+  return source_bytes, content_type
+
+
 @dataclasses.dataclass
 class _CachedAudioEntry:
   path: str
@@ -122,6 +204,13 @@ class _AudioArtifactCache:
           or '.bin'
       )
       source_bytes = response.content
+    elif _is_s3_url(source):
+      source_bytes, content_type = _read_s3_object_bytes(source)
+      suffix = (
+          epath.Path(parsed.path).suffix
+          or mimetypes.guess_extension(content_type.split(';')[0] or '')
+          or '.bin'
+      )
     else:
       suffix = epath.Path(source).suffix or '.bin'
       with epath.Path(source).open('rb') as f:
@@ -257,7 +346,7 @@ def _resolve_cached_audio_path(
     resampling_type: str,
     cache_local_audio: bool,
 ) -> str:
-  if _is_http_url(filepath) or cache_local_audio:
+  if _is_remote_audio_path(filepath) or cache_local_audio:
     return get_url_audio_cache().get_local_path(
         filepath, sample_rate=sample_rate, resampling_type=resampling_type
     )
@@ -286,7 +375,7 @@ def load_audio(
   path = os.fspath(path)
   if path.startswith('xc'):
     return load_xc_audio(path, target_sample_rate, dtype=dtype)
-  elif _is_http_url(path):
+  elif _is_remote_audio_path(path):
     return load_url_audio(path, target_sample_rate, dtype=dtype)
   else:
     return load_audio_file(
@@ -307,7 +396,7 @@ def load_audio_file(
 ) -> np.ndarray:
   """Read an audio file, and resample it using librosa."""
   filepath = os.fspath(filepath)
-  if _is_http_url(filepath):
+  if _is_remote_audio_path(filepath):
     return load_url_audio(
         filepath,
         target_sample_rate=target_sample_rate,
@@ -561,7 +650,7 @@ def get_file_length_s_and_sample_rate(
     filepath: str, cache_local_audio: bool = False
 ) -> tuple[float, int]:
   """As it says on the tin, or (-1, -1) if unparseable."""
-  if _is_http_url(filepath):
+  if _is_remote_audio_path(filepath):
     return get_url_audio_cache().get_native_info(
         filepath, resampling_type='polyphase'
     )
@@ -590,7 +679,7 @@ def get_file_length_s_and_sample_rate(
 
 def expect_soundfile_compatibility(filepath: str | epath.PathLike) -> bool:
   """Returns True if soundfile can be used to load the audio file."""
-  if _is_http_url(os.fspath(filepath)):
+  if _is_remote_audio_path(os.fspath(filepath)):
     return False
   extension = epath.Path(filepath).suffix.lower()
   if extension in ('.wav', '.flac', '.ogg', '.opus'):

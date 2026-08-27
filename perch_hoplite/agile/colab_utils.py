@@ -56,6 +56,13 @@ def load_configs(
     qdrant_host: str | None = None,
     qdrant_port: int | None = None,
     qdrant_collection_name: str | None = None,
+    s3_endpoint: str | None = None,
+    s3_access_key: str | None = None,
+    s3_secret_key: str | None = None,
+    s3_session_token: str | None = None,
+    s3_region: str | None = None,
+    s3_use_ssl: bool | None = None,
+    s3_verify: bool | None = None,
 ) -> AgileConfigs:
   """Load default configs for the notebook and return them as an AgileConfigs.
 
@@ -70,10 +77,32 @@ def load_configs(
     qdrant_host: Qdrant host for the pg_qdrant backend.
     qdrant_port: Qdrant port for the pg_qdrant backend.
     qdrant_collection_name: Qdrant collection name for the pg_qdrant backend.
+    s3_endpoint: Optional S3-compatible endpoint URL.
+    s3_access_key: Optional S3 access key.
+    s3_secret_key: Optional S3 secret key.
+    s3_session_token: Optional S3 session token.
+    s3_region: Optional S3 region.
+    s3_use_ssl: Optional override for S3 TLS usage.
+    s3_verify: Optional override for S3 certificate verification.
 
   Returns:
     AgileConfigs object with the loaded configs.
   """
+  if s3_endpoint is not None:
+    os.environ['HOPLITE_S3_ENDPOINT'] = s3_endpoint
+  if s3_access_key is not None:
+    os.environ['HOPLITE_S3_ACCESS_KEY'] = s3_access_key
+  if s3_secret_key is not None:
+    os.environ['HOPLITE_S3_SECRET_KEY'] = s3_secret_key
+  if s3_session_token is not None:
+    os.environ['HOPLITE_S3_SESSION_TOKEN'] = s3_session_token
+  if s3_region is not None:
+    os.environ['HOPLITE_S3_REGION'] = s3_region
+  if s3_use_ssl is not None:
+    os.environ['HOPLITE_S3_USE_SSL'] = str(s3_use_ssl)
+  if s3_verify is not None:
+    os.environ['HOPLITE_S3_VERIFY'] = str(s3_verify)
+
   if db_path is None:
     if len(audio_sources.audio_globs) > 1:
       raise ValueError(

@@ -17,11 +17,39 @@
 
 import shutil
 import tempfile
+from unittest import mock
 
 from perch_hoplite.agile import source_info
 from perch_hoplite.agile.tests import test_utils
 
 from absl.testing import absltest
+
+
+class _FakeS3Path:
+
+  def __init__(self, path: str, glob_results=()):
+    self._path = path
+    self._glob_results = tuple(glob_results)
+
+  def as_posix(self) -> str:
+    return self._path
+
+  def glob(self, pattern: str):
+    del pattern
+    return self._glob_results
+
+  def relative_to(self, other: '_FakeS3Path') -> '_FakeS3Path':
+    prefix = other.as_posix().rstrip('/') + '/'
+    if not self._path.startswith(prefix):
+      raise ValueError('Not a subpath')
+    return _FakeS3Path(self._path[len(prefix) :])
+
+
+class _FakeS3PathNoRelative(_FakeS3Path):
+
+  def relative_to(self, other: '_FakeS3Path') -> '_FakeS3Path':
+    del other
+    raise ValueError('relative_to not supported')
 
 
 class SourceInfoTest(absltest.TestCase):
@@ -193,6 +221,75 @@ class SourceInfoTest(absltest.TestCase):
       )
       with self.assertRaises(ValueError):
         audio_sources_1.merge_update(incompatible)
+
+  def test_s3_audio_sources_iteration(self):
+    base_path = 's3://bucket/audio'
+    file_a = _FakeS3Path('s3://bucket/audio/deploy_a/file_a.wav')
+    file_b = _FakeS3Path('s3://bucket/audio/deploy_b/file_b.wav')
+
+    audio_sources = source_info.AudioSources(
+        audio_globs=(
+            source_info.AudioSourceConfig(
+                dataset_name='s3_dataset',
+                base_path=base_path,
+                file_glob='**/*.wav',
+                shard_len_s=2.0,
+            ),
+        )
+    )
+
+    with mock.patch.object(
+        source_info,
+        '_iter_s3_filepaths',
+        return_value=(file_a, file_b),
+    ):
+      with mock.patch.object(
+          audio_sources,
+          '_get_audio_len_s_and_sample_rate_hz',
+          return_value=(5.0, 16000),
+      ):
+        got = tuple(audio_sources.iterate_all_sources())
+
+    self.assertLen(got, 6)
+    self.assertEqual(got[0].file_id, 'deploy_a/file_a.wav')
+    self.assertEqual(got[1].file_id, 'deploy_a/file_a.wav')
+    self.assertEqual(got[2].file_id, 'deploy_a/file_a.wav')
+    self.assertEqual(got[0].offset_s, 0.0)
+    self.assertEqual(got[1].offset_s, 2.0)
+    self.assertEqual(got[2].offset_s, 4.0)
+    self.assertEqual(got[3].file_id, 'deploy_b/file_b.wav')
+    self.assertEqual(got[0].sample_rate_hz, 16000)
+
+  def test_s3_audio_sources_iteration_file_id_fallback(self):
+    base_path = 's3://bucket/audio'
+    file_a = _FakeS3PathNoRelative('s3://bucket/audio/deploy/file.wav')
+
+    audio_sources = source_info.AudioSources(
+        audio_globs=(
+            source_info.AudioSourceConfig(
+                dataset_name='s3_dataset',
+                base_path=base_path,
+                file_glob='**/*.wav',
+                shard_len_s=None,
+            ),
+        )
+    )
+
+    with mock.patch.object(
+        source_info,
+        '_iter_s3_filepaths',
+        return_value=(file_a,),
+    ):
+      with mock.patch.object(
+          audio_sources,
+          '_get_audio_len_s_and_sample_rate_hz',
+          return_value=(5.0, 16000),
+      ):
+        got = tuple(audio_sources.iterate_all_sources())
+
+    self.assertLen(got, 1)
+    self.assertEqual(got[0].file_id, 'deploy/file.wav')
+    self.assertEqual(got[0].filepath, 's3://bucket/audio/deploy/file.wav')
 
 
 if __name__ == '__main__':

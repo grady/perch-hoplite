@@ -146,6 +146,22 @@ For PostgreSQL + Qdrant support:
 uv pip install -e '.[pg_qdrant]'
 ```
 
+### S3-Compatible Audio Ingestion
+
+For agile embedding pipelines, audio can be loaded from `s3://...` URIs.
+Configure access using environment variables:
+
+```bash
+export HOPLITE_S3_ENDPOINT="http://localhost:9000"   # Optional for AWS S3
+export HOPLITE_S3_ACCESS_KEY="<access-key>"
+export HOPLITE_S3_SECRET_KEY="<secret-key>"
+export HOPLITE_S3_REGION="us-east-1"                 # Optional
+export HOPLITE_S3_USE_SSL="false"                    # Optional
+```
+
+See [perch_hoplite/agile/README.md](perch_hoplite/agile/README.md) for
+base-path and file-glob conventions.
+
 ## Disclaimer
 
 This is not an officially supported Google product. This project is not eligible

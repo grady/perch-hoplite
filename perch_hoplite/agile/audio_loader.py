@@ -23,6 +23,10 @@ from perch_hoplite import audio_io
 from perch_hoplite.agile import source_info
 
 
+def _is_remote_base_path(path: str) -> bool:
+  return path.startswith(('gs://', 's3://', 'http://', 'https://'))
+
+
 def make_filepath_loader(
     audio_sources: source_info.AudioSources,
     sample_rate_hz: int = 32000,
@@ -51,7 +55,7 @@ def make_filepath_loader(
     found_path = None
     for audio_source in audio_sources.audio_globs:
       path = epath.Path(audio_source.base_path) / source_id
-      if path.exists():
+      if _is_remote_base_path(audio_source.base_path) or path.exists():
         found_path = path
         break
     if found_path is None:

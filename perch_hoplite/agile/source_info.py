@@ -17,12 +17,62 @@
 
 from collections.abc import Iterator
 import dataclasses
+from pathlib import PurePosixPath
+from urllib.parse import urlparse
 
 from etils import epath
 from ml_collections import config_dict
 from perch_hoplite import audio_io
 from perch_hoplite.db import datatypes
 import tqdm
+
+
+def _is_s3_path(path: str) -> bool:
+  return path.startswith('s3://')
+
+
+@dataclasses.dataclass(frozen=True)
+class _S3Path:
+  path: str
+
+  def as_posix(self) -> str:
+    return self.path
+
+  def relative_to(self, other: '_S3Path') -> '_S3Path':
+    prefix = other.path.rstrip('/') + '/'
+    if not self.path.startswith(prefix):
+      raise ValueError(f'{self.path} is not under {other.path}')
+    return _S3Path(self.path[len(prefix) :])
+
+
+def _iter_s3_filepaths(base_path: str, file_glob: str) -> tuple[_S3Path, ...]:
+  """Lists S3 objects under base_path and filters by file_glob."""
+  parsed = urlparse(base_path)
+  bucket = parsed.netloc
+  prefix = parsed.path.lstrip('/').rstrip('/')
+  if not bucket:
+    raise ValueError(f'Invalid S3 base path: {base_path}')
+  try:
+    import boto3
+  except ImportError as exc:
+    raise ImportError('S3 support requires installing boto3.') from exc
+
+  s3_client = boto3.client('s3', **audio_io._s3_storage_options_from_env())
+  paginator = s3_client.get_paginator('list_objects_v2')
+  list_kwargs = {'Bucket': bucket}
+  if prefix:
+    list_kwargs['Prefix'] = f'{prefix}/'
+
+  matches = []
+  for page in paginator.paginate(**list_kwargs):
+    for obj in page.get('Contents', ()):
+      key = obj.get('Key', '')
+      if not key:
+        continue
+      rel_key = key[len(prefix) + 1 :] if prefix else key
+      if PurePosixPath(rel_key).match(file_glob):
+        matches.append(_S3Path(f's3://{bucket}/{key}'))
+  return tuple(matches)
 
 
 @dataclasses.dataclass
@@ -165,13 +215,20 @@ class AudioSources(datatypes.HopliteConfig):
       ):
         continue
       # If base_path is a URL, the posix path may not match the original string.
-      base_path = epath.Path(glob.base_path)
-      filepaths = tuple(base_path.glob(glob.file_glob))
+      if _is_s3_path(glob.base_path):
+        base_path = _S3Path(glob.base_path.rstrip('/'))
+        filepaths = _iter_s3_filepaths(glob.base_path, glob.file_glob)
+      else:
+        base_path = epath.Path(glob.base_path)
+        filepaths = tuple(base_path.glob(glob.file_glob))
       shard_len_s = glob.shard_len_s
       max_shards_per_file = glob.max_shards_per_file
 
       for filepath in tqdm.tqdm(filepaths):
-        file_id = filepath.as_posix()[len(base_path.as_posix()) + 1 :]
+        try:
+          file_id = filepath.relative_to(base_path).as_posix()
+        except ValueError:
+          file_id = filepath.as_posix()[len(base_path.as_posix()) + 1 :]
         audio_len_s, sample_rate_hz = self._get_audio_len_s_and_sample_rate_hz(
             filepath
         )

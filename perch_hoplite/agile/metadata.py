@@ -17,11 +17,50 @@
 
 import collections
 import dataclasses
+import io
+import os
 from typing import Any
 
 from etils import epath
 import pandas as pd
+from perch_hoplite import audio_io
 from perch_hoplite.db import datatypes
+
+
+def _is_s3_path(path: str | epath.PathLike) -> bool:
+  return os.fspath(path).startswith('s3://')
+
+
+def _is_missing_s3_object_error(exc: Exception) -> bool:
+  code = (
+      getattr(exc, 'response', {})
+      .get('Error', {})
+      .get('Code', '')
+      .lower()
+  )
+  return code in ('nosuchkey', 'notfound', '404')
+
+
+def _read_optional_csv(
+    path: str | epath.Path,
+    *,
+    dtype: dict[str, type] | None = None,
+    index_col: bool | int = False,
+) -> pd.DataFrame:
+  """Returns a CSV as a DataFrame, or empty DataFrame if file is absent."""
+  if _is_s3_path(path):
+    try:
+      source_bytes, _ = audio_io._read_s3_object_bytes(os.fspath(path))
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+      if _is_missing_s3_object_error(exc):
+        return pd.DataFrame()
+      raise
+    return pd.read_csv(io.BytesIO(source_bytes), dtype=dtype, index_col=index_col)
+
+  path = epath.Path(path)
+  if path.exists():
+    return pd.read_csv(path, dtype=dtype, index_col=index_col)
+  return pd.DataFrame()
 
 
 @dataclasses.dataclass
@@ -224,34 +263,19 @@ class AgileMetadata:
       annotations_path: str | epath.Path,
   ) -> 'AgileMetadata':
     """Creates an AgileMetadata instance from CSV files."""
-    deployments_path = epath.Path(deployments_path)
-    recordings_path = epath.Path(recordings_path)
-    description_path = epath.Path(description_path)
-    annotations_path = epath.Path(annotations_path)
-
-    annotations_df = pd.DataFrame()
-    if annotations_path.exists():
-      annotations_df = pd.read_csv(
-          annotations_path,
-          dtype={
-              'recording': str,
-              'label': str,
-              'start_offset_s': float,
-              'end_offset_s': float,
-              'label_type': str,
-          },
-      )
-
-    description_df = pd.DataFrame()
-    if description_path.exists():
-      description_df = pd.read_csv(description_path, index_col=False)
-
-    deployment_df = pd.DataFrame()
-    if deployments_path.exists():
-      deployment_df = pd.read_csv(deployments_path, index_col=False)
-    recording_df = pd.DataFrame()
-    if recordings_path.exists():
-      recording_df = pd.read_csv(recordings_path, index_col=False)
+    annotations_df = _read_optional_csv(
+        annotations_path,
+        dtype={
+            'recording': str,
+            'label': str,
+            'start_offset_s': float,
+            'end_offset_s': float,
+            'label_type': str,
+        },
+    )
+    description_df = _read_optional_csv(description_path, index_col=False)
+    deployment_df = _read_optional_csv(deployments_path, index_col=False)
+    recording_df = _read_optional_csv(recordings_path, index_col=False)
     return cls.from_dataframes(
         description_df, deployment_df, recording_df, annotations_df
     )

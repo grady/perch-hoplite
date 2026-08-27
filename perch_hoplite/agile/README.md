@@ -27,6 +27,46 @@ including the deployment directory (e.g., `deployment_A/recording01.wav`).
 This relative path serves as the recording identifier (represented by the
 `recording` column) for recordings when linking metadata or annotations.
 
+`base_path` may be a local filesystem path, `gs://...`, or `s3://...`.
+
+## Using S3-Compatible Object Stores
+
+Hoplite supports reading audio from S3-compatible object stores when
+`AudioSourceConfig.base_path` is an `s3://...` URI.
+
+Required configuration is provided through environment variables:
+
+* `HOPLITE_S3_ENDPOINT`: Endpoint URL for S3-compatible stores (for example,
+  `http://localhost:9000` for MinIO).
+* `HOPLITE_S3_ACCESS_KEY`: Access key ID.
+* `HOPLITE_S3_SECRET_KEY`: Secret access key.
+
+Optional configuration:
+
+* `HOPLITE_S3_SESSION_TOKEN`: Session token.
+* `HOPLITE_S3_REGION`: Region name.
+* `HOPLITE_S3_USE_SSL`: `true`/`false`, defaults to `true`.
+* `HOPLITE_S3_VERIFY`: `true`/`false` or a CA bundle path.
+
+Example:
+
+```bash
+export HOPLITE_S3_ENDPOINT="http://localhost:9000"
+export HOPLITE_S3_ACCESS_KEY="minioadmin"
+export HOPLITE_S3_SECRET_KEY="minioadmin"
+export HOPLITE_S3_USE_SSL="false"
+```
+
+Then configure your source as:
+
+```python
+source_info.AudioSourceConfig(
+    dataset_name='my_dataset',
+    base_path='s3://my-bucket/audio',
+    file_glob='**/*.wav',
+)
+```
+
 ## Adding metadata to the Hoplite Database
 
 The Agile embedding pipeline supports adding metadata to deployments and

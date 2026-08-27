@@ -18,6 +18,7 @@
 import os
 import shutil
 import tempfile
+from unittest import mock
 
 from perch_hoplite.agile import metadata
 from perch_hoplite.db import datatypes
@@ -196,6 +197,24 @@ class MetadataTest(absltest.TestCase):
       os.remove(ann_path)
       md = metadata.AgileMetadata.from_directory(self.tempdir)
       self.assertEqual([], md.get_recording_annotations('rec_a'))
+
+  def test_s3_directory_with_missing_metadata_files(self):
+    class _NoSuchKeyError(Exception):
+
+      def __init__(self):
+        super().__init__('NoSuchKey')
+        self.response = {'Error': {'Code': 'NoSuchKey'}}
+
+    with mock.patch.object(
+        metadata.audio_io,
+        '_read_s3_object_bytes',
+        side_effect=_NoSuchKeyError(),
+    ):
+      md = metadata.AgileMetadata.from_directory('s3://bucket/audio')
+
+    self.assertEqual({}, md.deployment_metadata)
+    self.assertEqual({}, md.recording_metadata)
+    self.assertEqual([], md.get_recording_annotations('rec_a'))
 
 
 if __name__ == '__main__':

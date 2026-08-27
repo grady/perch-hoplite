@@ -42,7 +42,7 @@ class TimestampResolver(abc.ABC):
     filename = recording.filename
     path = epath.Path(filename)
     if (
-        str(filename).startswith(('gs://', 'http://', 'https://', '/'))
+        str(filename).startswith(('gs://', 's3://', 'http://', 'https://', '/'))
         or path.exists()
     ):
       return path
@@ -50,7 +50,9 @@ class TimestampResolver(abc.ABC):
     if self.base_path:
       candidate = self.base_path / filename
       if (
-          str(self.base_path).startswith(('gs://', 'http://', 'https://', '/'))
+          str(self.base_path).startswith(
+              ('gs://', 's3://', 'http://', 'https://', '/')
+          )
           or candidate.exists()
       ):
         return candidate
@@ -64,7 +66,7 @@ class TimestampResolver(abc.ABC):
           if base:
             candidate = epath.Path(base) / filename
             if (
-                str(base).startswith(('gs://', 'http://', 'https://'))
+                str(base).startswith(('gs://', 's3://', 'http://', 'https://'))
                 or candidate.exists()
             ):
               return candidate
