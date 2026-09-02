@@ -21,6 +21,7 @@ maintainers = [
 dependencies = [
     "absl-py>=1.4.0,<2.0.0",
     "boto3>=1.34,<2.0",
+    "click>=8.0,<9.0",
     "etils[epath]>=1.5.0,<2.0.0",
     "imageio>=2.5.0,<3.0.0",
     "ipywidgets>=8.1,<9.0",
@@ -35,6 +36,9 @@ dependencies = [
     "scipy>=1.8.0,<2.0",
     "usearch>=2.17,<3.0",
 ]
+
+[project.scripts]
+hoplite = "perch_hoplite.agile.cli:main"
 
 [project.optional-dependencies]
 jax = [

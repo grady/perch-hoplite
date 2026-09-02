@@ -89,6 +89,58 @@ Or install the latest version from GitHub:
 pip install git+https://github.com/google-research/perch-hoplite.git
 ```
 
+## Command-Line Embedding
+
+`hoplite embed` runs the embedding stage of
+[`agile/01_embed_audio.ipynb`](perch_hoplite/agile/01_embed_audio.ipynb), then
+stores the generated embeddings in a Hoplite database. Install the model
+dependencies first; `perch_v2` requires the `tf` or `tf-cuda` extra.
+
+Embed a local directory into a SQLite/USearch database:
+
+```bash
+hoplite embed \
+  --dataset-name field-recordings \
+  --audio-path /data/audio \
+  --audio-glob '**/*.flac' \
+  --db-path /data/hoplite-db
+```
+
+To use PostgreSQL with Qdrant, install the `pg_qdrant` extra and supply the
+database details:
+
+```bash
+hoplite embed \
+  --dataset-name field-recordings \
+  --audio-path /data/audio \
+  --audio-glob '**/*.flac' \
+  --db-backend pg_qdrant \
+  --db-dsn 'postgresql://user:pass@host:5432/hoplite' \
+  --qdrant-host qdrant.example.org \
+  --qdrant-collection-name field-recordings
+```
+
+S3-compatible sources use the same command. Prefer environment variables for
+credentials rather than command-line flags so credentials do not enter shell
+history:
+
+```bash
+export HOPLITE_S3_ENDPOINT='https://storage.example.org:9000'
+export HOPLITE_S3_ACCESS_KEY='<access-key>'
+export HOPLITE_S3_SECRET_KEY='<secret-key>'
+hoplite embed \
+  --dataset-name field-recordings \
+  --audio-path 's3://audio-bucket/recordings' \
+  --audio-glob '**/*.flac' \
+  --db-path /data/hoplite-db
+```
+
+Run `hoplite embed --help` for controls such as sharding, worker count,
+duplicate handling, timestamp parsing, and direct S3 or Qdrant overrides. The
+command covers embedding only; continue with
+[`agile/02_agile_modeling.ipynb`](perch_hoplite/agile/02_agile_modeling.ipynb)
+for search and classifier training.
+
 ### Running the Tests
 
 After installation, you can run the tests to check that everything is working:
