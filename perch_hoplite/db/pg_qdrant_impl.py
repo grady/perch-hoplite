@@ -1014,6 +1014,63 @@ class PgQdrantDB(interface.HopliteDBInterface):
           f' got {embeddings_batch.shape[-1]}.'
       )
 
+    if handle_duplicates == 'allow':
+      if not windows_batch:
+        return []
+
+      column_names = list(windows_batch[0])
+      for column_name in column_names:
+        if not is_valid_sql_identifier(column_name):
+          raise ValueError(f'`{column_name}` is not a valid SQL identifier.')
+      expected_columns = set(column_names)
+      for window_kwargs in windows_batch:
+        if set(window_kwargs) != expected_columns:
+          raise ValueError(
+              'All windows in an allow-mode batch must have the same columns.'
+          )
+
+      for column_name in column_names:
+        if column_name in _DEFAULT_COLUMNS['windows']:
+          continue
+        value = windows_batch[0][column_name]
+        if column_name not in self._extra_table_columns['windows']:
+          self.add_extra_table_column('windows', column_name, type(value))
+
+      row_placeholders = f"({', '.join(['%s'] * len(column_names))})"
+      values = []
+      for window_kwargs in windows_batch:
+        values.extend(
+            normalize_sql_value(window_kwargs[column_name])
+            for column_name in column_names
+        )
+
+      cursor = self._get_cursor()
+      try:
+        cursor.execute(
+            f"""
+            INSERT INTO windows ({', '.join(column_names)})
+            VALUES {', '.join([row_placeholders] * len(windows_batch))}
+            RETURNING id
+            """,
+            values,
+        )
+      except psycopg2.errors.ForeignKeyViolation as e:
+        raise RuntimeError(
+            'Error inserting the window into the database.'
+            ' Check that the recording_id exists.'
+        ) from e
+      except psycopg2.Error as e:
+        raise RuntimeError(
+            'Error inserting the window into the database.'
+        ) from e
+
+      window_ids = [row[0] for row in cursor.fetchall()]
+      if len(window_ids) != len(windows_batch):
+        raise RuntimeError('Error inserting the windows into the database.')
+      if embeddings_batch is not None:
+        self._upsert_embeddings(window_ids, embeddings_batch.astype(np.float32))
+      return window_ids
+
     # Check for intra-batch duplicates (mirrors SQLite implementation).
     if handle_duplicates != 'allow':
       for i in range(len(windows_batch)):

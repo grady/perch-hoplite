@@ -312,6 +312,54 @@ class PgQdrantDBTest(parameterized.TestCase):
     self.db.commit()
     self.assertLen(ids, n)
     self.assertEqual(self.db.count_embeddings(), n)
+    for index, window_id in enumerate(ids):
+      self.assertSequenceEqual(
+        self.db.get_window(window_id).offsets,
+        windows_batch[index]['offsets'],
+      )
+      np.testing.assert_allclose(
+        self.db.get_embedding(window_id), embeddings_batch[index], atol=1e-5
+      )
+
+  def test_insert_windows_batch_allow_extra_column(self):
+    dep_id = self.db.insert_deployment(name='d', project='p')
+    rec_id = self.db.insert_recording(filename='f.wav', deployment_id=dep_id)
+    windows_batch = [
+        {
+            'recording_id': rec_id,
+            'offsets': [float(index), float(index + 5)],
+            'timestamp': f'2026-09-01T00:00:0{index}+00:00',
+        }
+        for index in range(2)
+    ]
+
+    ids = self.db.insert_windows_batch(
+        windows_batch, handle_duplicates='allow'
+    )
+    self.db.commit()
+
+    for index, window_id in enumerate(ids):
+      self.assertEqual(
+          self.db.get_window(window_id).timestamp,
+          windows_batch[index]['timestamp'],
+      )
+
+  def test_insert_windows_batch_allow_rejects_inconsistent_columns(self):
+    dep_id = self.db.insert_deployment(name='d', project='p')
+    rec_id = self.db.insert_recording(filename='f.wav', deployment_id=dep_id)
+
+    with self.assertRaisesRegex(ValueError, 'same columns'):
+      self.db.insert_windows_batch(
+          [
+              {'recording_id': rec_id, 'offsets': [0.0, 5.0]},
+              {
+                  'recording_id': rec_id,
+                  'offsets': [5.0, 10.0],
+                  'timestamp': '2026-09-01T00:00:00+00:00',
+              },
+          ],
+          handle_duplicates='allow',
+      )
 
   def test_insert_windows_batch_skip_all_duplicates(self):
     rng = np.random.default_rng(33)
