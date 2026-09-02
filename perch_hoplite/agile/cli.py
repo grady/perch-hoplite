@@ -72,8 +72,11 @@ def main() -> None:
 )
 @click.option('--db-path', type=str, help='SQLite database directory.')
 @click.option('--db-dsn', type=str, help='PostgreSQL DSN for pg_qdrant.')
-@click.option('--qdrant-host', type=str, help='Qdrant host for pg_qdrant.')
-@click.option('--qdrant-port', type=click.IntRange(min=1), default=6333, help='Qdrant port.')
+@click.option(
+  '--qdrant-url',
+  type=str,
+  help='Qdrant endpoint URL for pg_qdrant, such as https://qdrant.example.com:443.',
+)
 @click.option('--qdrant-collection-name', type=str, help='Qdrant collection name.')
 @click.option('--batch-size', type=click.IntRange(min=1), default=16, show_default=True)
 @click.option(
@@ -107,8 +110,7 @@ def embed_audio(
     db_backend: str,
     db_path: str | None,
     db_dsn: str | None,
-    qdrant_host: str | None,
-    qdrant_port: int | None,
+    qdrant_url: str | None,
     qdrant_collection_name: str | None,
     batch_size: int,
     handle_duplicates: str,
@@ -131,7 +133,7 @@ def embed_audio(
   """Embed audio files into a Hoplite database."""
   if db_backend == 'sqlite_usearch' and any(
       value is not None
-      for value in (db_dsn, qdrant_host, qdrant_port, qdrant_collection_name)
+      for value in (db_dsn, qdrant_url, qdrant_collection_name)
   ):
     raise click.UsageError(
         'PostgreSQL/Qdrant options require --db-backend pg_qdrant.'
@@ -163,8 +165,7 @@ def embed_audio(
       model_config_key=model_config_key,
       db_key=db_backend,
       db_dsn=db_dsn,
-      qdrant_host=qdrant_host,
-      qdrant_port=qdrant_port,
+      qdrant_url=qdrant_url,
       qdrant_collection_name=qdrant_collection_name,
       s3_endpoint=s3_endpoint,
       s3_access_key=s3_access_key,

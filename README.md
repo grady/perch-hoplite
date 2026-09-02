@@ -116,9 +116,15 @@ hoplite embed \
   --audio-glob '**/*.flac' \
   --db-backend pg_qdrant \
   --db-dsn 'postgresql://user:pass@host:5432/hoplite' \
-  --qdrant-host qdrant.example.org \
+  --qdrant-url 'https://qdrant.example.org:443' \
   --qdrant-collection-name field-recordings
 ```
+
+Set `HOPLITE_QDRANT_URL` instead of passing `--qdrant-url` to configure the
+endpoint for repeated runs. For endpoints that require authentication, set
+`HOPLITE_QDRANT_API_KEY`; it is passed to Qdrant at connection time and is not
+stored in PostgreSQL metadata. Use an `https://` URL for TLS with standard
+public certificate verification. Do not embed credentials in the URL.
 
 S3-compatible sources use the same command. Prefer environment variables for
 credentials rather than command-line flags so credentials do not enter shell
@@ -154,14 +160,12 @@ python -m unittest discover -s perch_hoplite/agile/tests -p "*test.py"
 The database tests support three backends:
 - in-memory / SQLite + USearch tests run by default
 - PostgreSQL + Qdrant tests run when `HOPLITE_PG_DSN` is set
-- external Qdrant can be selected with `HOPLITE_QDRANT_HOST` and
-  `HOPLITE_QDRANT_PORT` (default `6333`)
+- external Qdrant can be selected with `HOPLITE_QDRANT_URL`
 
 Example:
 ```bash
 export HOPLITE_PG_DSN="postgresql://user:pass@host:5432/hoplite_test"
-export HOPLITE_QDRANT_HOST=localhost
-export HOPLITE_QDRANT_PORT=6333
+export HOPLITE_QDRANT_URL=http://localhost:6333
 python -m unittest perch_hoplite.db.tests.pg_qdrant_impl_test -v
 ```
 

@@ -17,6 +17,7 @@
 
 import dataclasses
 import os
+from urllib import parse
 
 from etils import epath
 from ml_collections import config_dict
@@ -53,8 +54,7 @@ def load_configs(
     model_config_key: str = 'perch_v2',
     db_key: str = 'sqlite_usearch',
     db_dsn: str | None = None,
-    qdrant_host: str | None = None,
-    qdrant_port: int | None = None,
+    qdrant_url: str | None = None,
     qdrant_collection_name: str | None = None,
     s3_endpoint: str | None = None,
     s3_access_key: str | None = None,
@@ -74,8 +74,7 @@ def load_configs(
     model_config_key: Name of the embedding model to use.
     db_key: The type of database to use.
     db_dsn: PostgreSQL DSN for the pg_qdrant backend.
-    qdrant_host: Qdrant host for the pg_qdrant backend.
-    qdrant_port: Qdrant port for the pg_qdrant backend.
+    qdrant_url: Qdrant endpoint URL for the pg_qdrant backend.
     qdrant_collection_name: Qdrant collection name for the pg_qdrant backend.
     s3_endpoint: Optional S3-compatible endpoint URL.
     s3_access_key: Optional S3 access key.
@@ -139,16 +138,28 @@ def load_configs(
     )
     if qdrant_collection_name:
       qdrant_cfg.collection_name = qdrant_collection_name
-    if qdrant_host is None:
-      qdrant_host = os.environ.get('HOPLITE_QDRANT_HOST')
-    if qdrant_host:
+    if qdrant_url is None:
+      qdrant_url = os.environ.get('HOPLITE_QDRANT_URL')
+    if qdrant_url:
+      parsed_qdrant_url = parse.urlsplit(qdrant_url)
+      if (
+          parsed_qdrant_url.scheme not in ('http', 'https')
+          or not parsed_qdrant_url.hostname
+          or parsed_qdrant_url.username is not None
+          or parsed_qdrant_url.password is not None
+          or parsed_qdrant_url.query
+          or parsed_qdrant_url.fragment
+      ):
+        raise ValueError(
+            'qdrant_url must be an http or https endpoint URL without '
+            'embedded credentials, query parameters, or fragments.'
+        )
+      try:
+        parsed_qdrant_url.port
+      except ValueError as e:
+        raise ValueError(f'Invalid qdrant_url port: {qdrant_url!r}.') from e
       qdrant_cfg.mode = 'remote'
-      qdrant_cfg.host = qdrant_host
-      qdrant_cfg.port = int(
-          qdrant_port
-          if qdrant_port is not None
-          else os.environ.get('HOPLITE_QDRANT_PORT', '6333')
-      )
+      qdrant_cfg.url = qdrant_url
     db_config = config_dict.ConfigDict({
         'db_dsn': db_dsn,
         'qdrant_cfg': qdrant_cfg,

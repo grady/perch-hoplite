@@ -104,10 +104,8 @@ class CliTest(absltest.TestCase):
               'pg_qdrant',
               '--db-dsn',
               'postgresql://localhost/hoplite',
-              '--qdrant-host',
-              'qdrant',
-              '--qdrant-port',
-              '6334',
+              '--qdrant-url',
+              'https://qdrant.example:6333',
               '--qdrant-collection-name',
               'remote-embeddings',
               '--s3-endpoint',
@@ -124,8 +122,10 @@ class CliTest(absltest.TestCase):
 
     self.assertEqual(result.exit_code, 0, result.output)
     self.assertEqual(self.colab_utils.load_configs.call_args.kwargs['db_dsn'], 'postgresql://localhost/hoplite')
-    self.assertEqual(self.colab_utils.load_configs.call_args.kwargs['qdrant_host'], 'qdrant')
-    self.assertEqual(self.colab_utils.load_configs.call_args.kwargs['qdrant_port'], 6334)
+    self.assertEqual(
+      self.colab_utils.load_configs.call_args.kwargs['qdrant_url'],
+      'https://qdrant.example:443',
+    )
     self.assertEqual(
       self.colab_utils.load_configs.call_args.kwargs['qdrant_collection_name'],
         'remote-embeddings',
@@ -170,6 +170,8 @@ class CliTest(absltest.TestCase):
             '*.wav',
             '--db-dsn',
             'postgresql://localhost/hoplite',
+            '--qdrant-url',
+            'https://qdrant.example:443',
         ],
     )
 

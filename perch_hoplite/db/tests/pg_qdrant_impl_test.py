@@ -24,8 +24,12 @@ These tests require a live PostgreSQL instance. Set the environment variable
 By default the tests use an in-memory Qdrant instance. To point them at an
 external Qdrant server, set::
 
-    export HOPLITE_QDRANT_HOST=localhost
-    export HOPLITE_QDRANT_PORT=6333
+  export HOPLITE_QDRANT_URL=http://localhost:6333
+
+For an authenticated HTTPS endpoint, also set::
+
+  export HOPLITE_QDRANT_URL=https://qdrant.example.com:443
+  export HOPLITE_QDRANT_API_KEY=<api-key>
 
 Tests use a dedicated Qdrant collection name by default
 (`hoplite_test_embeddings`) so they do not collide with notebook or
@@ -36,6 +40,7 @@ Tests are automatically skipped when the variable is not set.
 
 import os
 import unittest
+from unittest import mock
 
 from ml_collections import config_dict
 import numpy as np
@@ -78,6 +83,35 @@ def _reset_db(db: pg_qdrant_impl.PgQdrantDB) -> None:
 
 class PgQdrantHelperTest(absltest.TestCase):
   """Unit tests for module-level SQL helper functions (no DB required)."""
+
+  def test_remote_qdrant_client_uses_url_and_runtime_api_key(self):
+    qdrant_cfg = pg_qdrant_impl.get_default_qdrant_config(16)
+    qdrant_cfg.mode = 'remote'
+    qdrant_cfg.url = 'https://qdrant.example:443'
+
+    with mock.patch.dict(
+        os.environ, {'HOPLITE_QDRANT_API_KEY': 'test-api-key'}, clear=True
+    ), mock.patch.object(pg_qdrant_impl, 'QdrantClient') as client_cls:
+      pg_qdrant_impl._make_qdrant_client(qdrant_cfg)
+
+    client_cls.assert_called_once_with(
+        url='https://qdrant.example:443', api_key='test-api-key'
+    )
+    self.assertNotIn('api_key', qdrant_cfg)
+
+  def test_remote_qdrant_client_allows_missing_api_key(self):
+    qdrant_cfg = pg_qdrant_impl.get_default_qdrant_config(16)
+    qdrant_cfg.mode = 'remote'
+    qdrant_cfg.url = 'http://localhost:6333'
+
+    with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+        pg_qdrant_impl, 'QdrantClient'
+    ) as client_cls:
+      pg_qdrant_impl._make_qdrant_client(qdrant_cfg)
+
+    client_cls.assert_called_once_with(
+        url='http://localhost:6333', api_key=None
+    )
 
   def test_is_valid_sql_identifier(self):
     self.assertTrue(pg_qdrant_impl.is_valid_sql_identifier('foo'))

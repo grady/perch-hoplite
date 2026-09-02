@@ -30,8 +30,7 @@ from perch_hoplite.db import sqlite_usearch_impl
 # Set HOPLITE_PG_DSN to enable pg_qdrant tests, e.g.:
 #   export HOPLITE_PG_DSN="postgresql://user:pass@localhost:5432/hoplite_test"
 _PG_DSN_ENV = 'HOPLITE_PG_DSN'
-_QDRANT_HOST_ENV = 'HOPLITE_QDRANT_HOST'
-_QDRANT_PORT_ENV = 'HOPLITE_QDRANT_PORT'
+_QDRANT_URL_ENV = 'HOPLITE_QDRANT_URL'
 _QDRANT_COLLECTION_ENV = 'HOPLITE_QDRANT_COLLECTION'
 _DEFAULT_TEST_QDRANT_COLLECTION = 'hoplite_test_embeddings'
 
@@ -148,18 +147,17 @@ def _reset_pg_qdrant_schema(pg_dsn: str) -> None:
 def get_qdrant_config(embedding_dim: int) -> config_dict.ConfigDict:
   """Return the Qdrant config for tests.
 
-  If ``HOPLITE_QDRANT_HOST`` is set, use a remote Qdrant server at that host
-  and ``HOPLITE_QDRANT_PORT`` (default 6333). Otherwise use in-memory Qdrant.
+  If ``HOPLITE_QDRANT_URL`` is set, use a remote Qdrant server at that URL.
+  Otherwise use in-memory Qdrant.
   """
   qdrant_cfg = pg_qdrant_impl.get_default_qdrant_config(embedding_dim)
   qdrant_cfg.collection_name = os.environ.get(
       _QDRANT_COLLECTION_ENV, _DEFAULT_TEST_QDRANT_COLLECTION
   )
-  qdrant_host = os.environ.get(_QDRANT_HOST_ENV)
-  if qdrant_host:
+  qdrant_url = os.environ.get(_QDRANT_URL_ENV)
+  if qdrant_url:
     qdrant_cfg.mode = 'remote'
-    qdrant_cfg.host = qdrant_host
-    qdrant_cfg.port = int(os.environ.get(_QDRANT_PORT_ENV, '6333'))
+    qdrant_cfg.url = qdrant_url
   return qdrant_cfg
 
 

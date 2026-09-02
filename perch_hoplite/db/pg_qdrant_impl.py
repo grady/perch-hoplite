@@ -41,6 +41,7 @@ import datetime as dt
 import functools
 import itertools
 import json
+import os
 import re
 from typing import Any, Literal
 
@@ -335,7 +336,10 @@ def _make_qdrant_client(qdrant_cfg: config_dict.ConfigDict) -> QdrantClient:
   if mode == 'local':
     return QdrantClient(path=qdrant_cfg.path)
   if mode == 'remote':
-    return QdrantClient(host=qdrant_cfg.host, port=int(qdrant_cfg.port))
+    return QdrantClient(
+        url=qdrant_cfg.url,
+        api_key=os.environ.get('HOPLITE_QDRANT_API_KEY'),
+    )
   raise ValueError(
       f"Unknown Qdrant mode: '{mode}'. Expected 'memory', 'local', or"
       " 'remote'."
