@@ -73,7 +73,7 @@ def main() -> None:
 @click.option('--db-path', type=str, help='SQLite database directory.')
 @click.option('--db-dsn', type=str, help='PostgreSQL DSN for pg_qdrant.')
 @click.option('--qdrant-host', type=str, help='Qdrant host for pg_qdrant.')
-@click.option('--qdrant-port', type=click.IntRange(min=1), help='Qdrant port.')
+@click.option('--qdrant-port', type=click.IntRange(min=1), default=6333, help='Qdrant port.')
 @click.option('--qdrant-collection-name', type=str, help='Qdrant collection name.')
 @click.option('--batch-size', type=click.IntRange(min=1), default=16, show_default=True)
 @click.option(
