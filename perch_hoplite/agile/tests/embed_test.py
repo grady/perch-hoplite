@@ -20,6 +20,7 @@ import datetime
 import os
 import shutil
 import tempfile
+from unittest import mock
 
 from ml_collections import config_dict
 from perch_hoplite.agile import embed
@@ -247,6 +248,20 @@ class DuplicateHandlingTest(absltest.TestCase):
 
     # Second pass with skip - should not add anything extra
     worker.process_all(handle_duplicates='skip')
+    self.assertEqual(db.count_embeddings(), 2)
+
+  def test_process_all_reuses_expanded_sources(self):
+    db = db_loader.create_new_usearch_db(db_path=self.db_path, embedding_dim=32)
+    worker = embed.EmbedWorker(self.audio_sources, self.model_config, db)
+
+    with mock.patch.object(
+        self.audio_sources,
+        'iterate_all_sources',
+        wraps=self.audio_sources.iterate_all_sources,
+    ) as iterate_all_sources:
+      worker.process_all(handle_duplicates='allow')
+
+    iterate_all_sources.assert_called_once_with(None)
     self.assertEqual(db.count_embeddings(), 2)
 
   def test_duplicate_overwrite(self):

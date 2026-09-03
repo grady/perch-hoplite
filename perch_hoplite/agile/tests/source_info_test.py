@@ -117,6 +117,29 @@ class SourceInfoTest(absltest.TestCase):
       shard_ids = tuple(audio_sources.iterate_all_sources())
       self.assertLen(shard_ids, 18)
 
+  def test_iterate_files_skips_audio_metadata(self):
+    test_utils.make_wav_files(
+        self.tempdir, ['pos', 'neg'], ['foo'], file_len_s=6.0
+    )
+    audio_sources = source_info.AudioSources(
+        audio_globs=(
+            source_info.AudioSourceConfig(
+                dataset_name='pos', base_path=self.tempdir, file_glob='pos/*.wav'
+            ),
+            source_info.AudioSourceConfig(
+                dataset_name='neg', base_path=self.tempdir, file_glob='neg/*.wav'
+            ),
+        )
+    )
+
+    with mock.patch.object(audio_sources, '_get_audio_len_s_and_sample_rate_hz') as get_info:
+      files = tuple(audio_sources.iterate_files(target_dataset_name='pos'))
+
+    self.assertLen(files, 1)
+    self.assertEqual(files[0][0].dataset_name, 'pos')
+    self.assertEqual(files[0][1], 'pos/foo_pos.wav')
+    get_info.assert_not_called()
+
   def test_audio_glob_compatibility(self):
     audio_glob_1 = source_info.AudioSourceConfig(
         dataset_name='pos',
@@ -259,6 +282,27 @@ class SourceInfoTest(absltest.TestCase):
     self.assertEqual(got[2].offset_s, 4.0)
     self.assertEqual(got[3].file_id, 'deploy_b/file_b.wav')
     self.assertEqual(got[0].sample_rate_hz, 16000)
+
+  def test_s3_iterate_files_skips_audio_metadata(self):
+    base_path = 's3://bucket/audio'
+    file_a = _FakeS3Path('s3://bucket/audio/deploy_a/file_a.wav')
+    audio_sources = source_info.AudioSources(
+        audio_globs=(
+            source_info.AudioSourceConfig(
+                dataset_name='s3_dataset',
+                base_path=base_path,
+                file_glob='**/*.wav',
+            ),
+        )
+    )
+
+    with mock.patch.object(
+        source_info, '_iter_s3_filepaths', return_value=(file_a,)
+    ), mock.patch.object(audio_sources, '_get_audio_len_s_and_sample_rate_hz') as get_info:
+      files = tuple(audio_sources.iterate_files())
+
+    self.assertEqual(files[0][1], 'deploy_a/file_a.wav')
+    get_info.assert_not_called()
 
   def test_s3_audio_sources_iteration_file_id_fallback(self):
     base_path = 's3://bucket/audio'

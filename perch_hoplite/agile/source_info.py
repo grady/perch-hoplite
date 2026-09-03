@@ -196,18 +196,11 @@ class AudioSources(datatypes.HopliteConfig):
     self._file_info_cache[filepath_posix] = (audio_len_s, sample_rate_hz)
     return audio_len_s, sample_rate_hz
 
-  def iterate_all_sources(
+  def iterate_files(
       self,
       target_dataset_name: str | None = None,
-  ) -> Iterator[SourceId]:
-    """Yields all sources for all datasets (or just a single dataset).
-
-    Args:
-      target_dataset_name: If not None, only yield sources for this dataset.
-
-    Yields:
-      SourceId objects.
-    """
+  ) -> Iterator[tuple[AudioSourceConfig, str, epath.Path | _S3Path]]:
+    """Yields each matching file without inspecting audio metadata."""
     for glob in self.audio_globs:
       if (
           target_dataset_name is not None
@@ -221,49 +214,66 @@ class AudioSources(datatypes.HopliteConfig):
       else:
         base_path = epath.Path(glob.base_path)
         filepaths = tuple(base_path.glob(glob.file_glob))
-      shard_len_s = glob.shard_len_s
-      max_shards_per_file = glob.max_shards_per_file
 
-      for filepath in tqdm.tqdm(filepaths):
+      for filepath in filepaths:
         try:
           file_id = filepath.relative_to(base_path).as_posix()
         except ValueError:
           file_id = filepath.as_posix()[len(base_path.as_posix()) + 1 :]
-        audio_len_s, sample_rate_hz = self._get_audio_len_s_and_sample_rate_hz(
-            filepath
-        )
-        if shard_len_s is None:
-          yield SourceId(
-              dataset_name=glob.dataset_name,
-              file_id=file_id,
-              offset_s=0,
-              shard_len_s=-1,
-              filepath=filepath.as_posix(),
-              sample_rate_hz=sample_rate_hz,
-          )
-          continue
+        yield glob, file_id, filepath
 
-        # Otherwise, need to emit sharded SourceId's.
-        if audio_len_s <= 0:
-          continue
-        shard_num = 0
-        while max_shards_per_file is None or shard_num < max_shards_per_file:
-          offset_s = shard_num * shard_len_s
-          if offset_s >= audio_len_s:
-            break
-          # When the new shard extends beyond the end of the audio, and the
-          # shard will be shorter than the minimum audio length, we are done.
-          if (
-              offset_s + shard_len_s > audio_len_s
-              and audio_len_s - offset_s < glob.min_audio_len_s
-          ):
-            break
-          yield SourceId(
-              dataset_name=glob.dataset_name,
-              file_id=file_id,
-              offset_s=offset_s,
-              shard_len_s=shard_len_s,
-              filepath=filepath.as_posix(),
-              sample_rate_hz=sample_rate_hz,
-          )
-          shard_num += 1
+  def iterate_all_sources(
+      self,
+      target_dataset_name: str | None = None,
+  ) -> Iterator[SourceId]:
+    """Yields all sources for all datasets (or just a single dataset).
+
+    Args:
+      target_dataset_name: If not None, only yield sources for this dataset.
+
+    Yields:
+      SourceId objects.
+    """
+    file_iterator = self.iterate_files(target_dataset_name)
+    for glob, file_id, filepath in tqdm.tqdm(file_iterator):
+      shard_len_s = glob.shard_len_s
+      max_shards_per_file = glob.max_shards_per_file
+
+      audio_len_s, sample_rate_hz = self._get_audio_len_s_and_sample_rate_hz(
+          filepath
+      )
+      if shard_len_s is None:
+        yield SourceId(
+            dataset_name=glob.dataset_name,
+            file_id=file_id,
+            offset_s=0,
+            shard_len_s=-1,
+            filepath=filepath.as_posix(),
+            sample_rate_hz=sample_rate_hz,
+        )
+        continue
+
+      # Otherwise, need to emit sharded SourceId's.
+      if audio_len_s <= 0:
+        continue
+      shard_num = 0
+      while max_shards_per_file is None or shard_num < max_shards_per_file:
+        offset_s = shard_num * shard_len_s
+        if offset_s >= audio_len_s:
+          break
+        # When the new shard extends beyond the end of the audio, and the
+        # shard will be shorter than the minimum audio length, we are done.
+        if (
+            offset_s + shard_len_s > audio_len_s
+            and audio_len_s - offset_s < glob.min_audio_len_s
+        ):
+          break
+        yield SourceId(
+            dataset_name=glob.dataset_name,
+            file_id=file_id,
+            offset_s=offset_s,
+            shard_len_s=shard_len_s,
+            filepath=filepath.as_posix(),
+            sample_rate_hz=sample_rate_hz,
+        )
+        shard_num += 1

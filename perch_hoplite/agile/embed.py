@@ -351,9 +351,12 @@ class EmbedWorker:
 
     # Gather unique deployments from sources.
     unique_deployments = set()
-    for source in self.audio_sources.iterate_all_sources(target_dataset_name):
+    for glob, file_id, _ in self.audio_sources.iterate_files(
+      target_dataset_name
+    ):
       unique_deployments.add(
-          (source.deployment_name_from_file_id(), source.dataset_name)
+        (file_id.split('/')[0] if '/' in file_id else glob.dataset_name,
+         glob.dataset_name)
       )
 
     # Create missing deployments in the database.
@@ -391,6 +394,7 @@ class EmbedWorker:
       handle_duplicates: Literal[
           'allow', 'overwrite', 'skip', 'error'
       ] = 'error',
+      sources: tuple[source_info.SourceId, ...] | None = None,
   ) -> set[int]:
     """Add recordings to db and create a source ID to recording ID mapping."""
     if handle_duplicates != 'allow':
@@ -400,9 +404,10 @@ class EmbedWorker:
       else:
         for r in existing:
           self._recording_map[(r.deployment_id, r.filename)] = r.id
-
     new_recordings = set([])
-    for source in self.audio_sources.iterate_all_sources(target_dataset_name):
+    if sources is None:
+      sources = tuple(self.audio_sources.iterate_all_sources(target_dataset_name))
+    for source in sources:
       deployment_id = self._get_or_insert_deployment_id(
           deployment_name=source.deployment_name_from_file_id(),
           project_name=source.dataset_name,
@@ -491,6 +496,7 @@ class EmbedWorker:
       ] = 'error',
       target_dataset_name: str | None = None,
       new_recordings: set[int] | None = None,
+        sources: tuple[source_info.SourceId, ...] | None = None,
   ):
     """Embed audio examples from the given dataset."""
     if self.timestamp_resolver is not None:
@@ -508,7 +514,11 @@ class EmbedWorker:
         initializer=worker_initializer,
         initargs=(state,),
     ) as executor:
-      source_iterator = self.audio_sources.iterate_all_sources(target_dataset_name)
+      if sources is None:
+        sources = tuple(
+            self.audio_sources.iterate_all_sources(target_dataset_name)
+        )
+      source_iterator = iter(sources)
       for source_ids_batch in batched(source_iterator, batch_size):
         recording_timestamps = [
             self.get_recording_timestamp(s.file_id, s.dataset_name)
@@ -648,8 +658,11 @@ class EmbedWorker:
     # Add deployments and recordings to the database.
     print('\nAdding deployments...')
     self.add_deployments(target_dataset_name, handle_duplicates)  # pyrefly: ignore[bad-argument-type]
+    sources = tuple(self.audio_sources.iterate_all_sources(target_dataset_name))
     print('\nAdding recordings...')
-    new_recordings = self.add_recordings(target_dataset_name, handle_duplicates)  # pyrefly: ignore[bad-argument-type]
+    new_recordings = self.add_recordings(
+      target_dataset_name, handle_duplicates, sources
+    )  # pyrefly: ignore[bad-argument-type]
     print('\nAdding annotations...')
     self.add_annotations(handle_duplicates=handle_duplicates)  # pyrefly: ignore[bad-argument-type]
     print('\nEmbedding audio...')
@@ -658,5 +671,6 @@ class EmbedWorker:
         handle_duplicates=handle_duplicates,  # pyrefly: ignore[bad-argument-type]
         target_dataset_name=target_dataset_name,
         new_recordings=new_recordings,
+        sources=sources,
     )
     self.db.commit()
