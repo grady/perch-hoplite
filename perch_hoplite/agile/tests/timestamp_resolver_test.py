@@ -205,6 +205,19 @@ class TimestampResolverTest(parameterized.TestCase):
     ts_from_db = resolver.get_offset_timestamp(rec_id, window_offset_s=120.5)
     self.assertEqual(ts_from_db, expected_with_offset)
 
+  @parameterized.parameters('in_mem', 'sqlite_usearch')
+  def test_timestamp_from_invalid_filename_returns_none(self, db_type):
+    db = self.get_db(db_type)
+    resolver = timestamp_resolver.TimestampFromFilename(
+        db=db,
+        datetime_format='%Y%m%d_%H%M%S',
+        datetime_timezone=datetime.timezone.utc,
+    )
+
+    self.assertIsNone(
+        resolver.get_filepath_timestamp('/recording/not_a_timestamp.wav')
+    )
+
 
 if __name__ == '__main__':
   absltest.main()

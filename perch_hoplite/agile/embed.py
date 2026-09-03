@@ -285,7 +285,13 @@ class EmbedWorker:
     if isinstance(rec_datetime, str):
       try:
         rec_datetime = datetime.datetime.fromisoformat(rec_datetime)
-      except ValueError:
+      except ValueError as error:
+        logging.warning(
+            'Could not parse recording timestamp %r for %s: %s',
+            rec_datetime,
+            filename,
+            error,
+        )
         pass
     if rec_datetime is None and self.timestamp_file_pattern is not None:
       try:
@@ -293,7 +299,13 @@ class EmbedWorker:
             epath.Path(filename).stem, self.timestamp_file_pattern
         )
         rec_datetime = rec_datetime.replace(tzinfo=datetime.timezone.utc)
-      except ValueError:
+      except ValueError as error:
+        logging.warning(
+            'Could not parse recording timestamp from %s using pattern %r: %s',
+            filename,
+            self.timestamp_file_pattern,
+            error,
+        )
         pass
     return rec_datetime  # pyrefly: ignore[bad-return]
 

@@ -174,7 +174,18 @@ class TimestampFromFilename(TimestampResolver):
           'filepath must be provided if base_timestamp is not set.'
       )
     filepath = epath.Path(filepath)
-    timestamp = datetime.datetime.strptime(filepath.stem, self.datetime_format)  # pyrefly: ignore[bad-argument-type]
+    try:
+      timestamp = datetime.datetime.strptime(
+          filepath.stem, self.datetime_format
+      )  # pyrefly: ignore[bad-argument-type]
+    except (TypeError, ValueError) as error:
+      logging.warning(
+          'Could not parse timestamp from %s using pattern %r: %s',
+          filepath,
+          self.datetime_format,
+          error,
+      )
+      return None
     timestamp = timestamp.replace(tzinfo=self.datetime_timezone)
     if subchunk_offset_s:
       timestamp += datetime.timedelta(seconds=subchunk_offset_s)
