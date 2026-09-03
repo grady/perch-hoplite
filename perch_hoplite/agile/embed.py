@@ -429,7 +429,7 @@ class EmbedWorker:
         if is_new:
           new_recordings.add(recording_id)
       elif handle_duplicates == 'skip':
-        continue
+        pass
       elif handle_duplicates == 'error':
         raise ValueError(
             f'Recording {source.file_id} already exists in deployment '
@@ -446,6 +446,7 @@ class EmbedWorker:
             source.dataset_name,
         )
         new_recordings.add(recording_id)
+      self.db.commit()
     self.db.commit()
     return new_recordings
 
