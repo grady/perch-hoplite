@@ -16,6 +16,7 @@
 """Functionality for embedding audio examples."""
 
 from concurrent import futures
+from collections.abc import Sequence
 import dataclasses
 import datetime
 import itertools
@@ -339,6 +340,7 @@ class EmbedWorker:
       handle_duplicates: Literal[
           'allow', 'overwrite', 'skip', 'error'
       ] = 'error',
+      files: Sequence[source_info.FileEntry] | None = None,
   ):
     """Add deployments to db and create a source ID to deployment ID mapping."""
     if handle_duplicates != 'allow':
@@ -351,8 +353,10 @@ class EmbedWorker:
 
     # Gather unique deployments from sources.
     unique_deployments = set()
-    for glob, file_id, _ in self.audio_sources.iterate_files(
-      target_dataset_name
+    if files is None:
+      files = tuple(self.audio_sources.iterate_files(target_dataset_name))
+    for glob, file_id, _ in tqdm.tqdm(
+        files, desc='Discovering deployments'
     ):
       unique_deployments.add(
         (file_id.split('/')[0] if '/' in file_id else glob.dataset_name,
@@ -657,9 +661,12 @@ class EmbedWorker:
 
     # Add deployments and recordings to the database.
     print('\nAdding deployments...')
-    self.add_deployments(target_dataset_name, handle_duplicates)  # pyrefly: ignore[bad-argument-type]
-    sources = tuple(self.audio_sources.iterate_all_sources(target_dataset_name))
+    files = tuple(self.audio_sources.iterate_files(target_dataset_name))
+    self.add_deployments(
+      target_dataset_name, handle_duplicates, files
+    )  # pyrefly: ignore[bad-argument-type]
     print('\nAdding recordings...')
+    sources = tuple(self.audio_sources.iterate_all_sources(files=files))
     new_recordings = self.add_recordings(
       target_dataset_name, handle_duplicates, sources
     )  # pyrefly: ignore[bad-argument-type]

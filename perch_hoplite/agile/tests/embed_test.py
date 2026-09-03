@@ -261,7 +261,8 @@ class DuplicateHandlingTest(absltest.TestCase):
     ) as iterate_all_sources:
       worker.process_all(handle_duplicates='allow')
 
-    iterate_all_sources.assert_called_once_with(None)
+    iterate_all_sources.assert_called_once()
+    self.assertIn('files', iterate_all_sources.call_args.kwargs)
     self.assertEqual(db.count_embeddings(), 2)
 
   def test_duplicate_overwrite(self):

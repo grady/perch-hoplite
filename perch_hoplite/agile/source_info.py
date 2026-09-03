@@ -15,7 +15,7 @@
 
 """Audio source information handling."""
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 import dataclasses
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
@@ -129,6 +129,8 @@ class AudioSourceConfig(datatypes.HopliteConfig):
         and self.min_audio_len_s == other.min_audio_len_s
     )
 
+FileEntry = tuple[AudioSourceConfig, str, epath.Path | _S3Path]
+
 
 @dataclasses.dataclass
 class AudioSources(datatypes.HopliteConfig):
@@ -199,7 +201,7 @@ class AudioSources(datatypes.HopliteConfig):
   def iterate_files(
       self,
       target_dataset_name: str | None = None,
-  ) -> Iterator[tuple[AudioSourceConfig, str, epath.Path | _S3Path]]:
+  ) -> Iterator[FileEntry]:
     """Yields each matching file without inspecting audio metadata."""
     for glob in self.audio_globs:
       if (
@@ -225,6 +227,7 @@ class AudioSources(datatypes.HopliteConfig):
   def iterate_all_sources(
       self,
       target_dataset_name: str | None = None,
+      files: Sequence[FileEntry] | None = None,
   ) -> Iterator[SourceId]:
     """Yields all sources for all datasets (or just a single dataset).
 
@@ -234,7 +237,9 @@ class AudioSources(datatypes.HopliteConfig):
     Yields:
       SourceId objects.
     """
-    file_iterator = self.iterate_files(target_dataset_name)
+    if files is None:
+      files = tuple(self.iterate_files(target_dataset_name))
+    file_iterator = files
     for glob, file_id, filepath in tqdm.tqdm(file_iterator):
       shard_len_s = glob.shard_len_s
       max_shards_per_file = glob.max_shards_per_file
