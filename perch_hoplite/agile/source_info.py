@@ -15,7 +15,7 @@
 
 """Audio source information handling."""
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator
 import dataclasses
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
@@ -45,7 +45,7 @@ class _S3Path:
     return _S3Path(self.path[len(prefix) :])
 
 
-def _iter_s3_filepaths(base_path: str, file_glob: str) -> tuple[_S3Path, ...]:
+def _iter_s3_filepaths(base_path: str, file_glob: str) -> Iterator[_S3Path]:
   """Lists S3 objects under base_path and filters by file_glob."""
   parsed = urlparse(base_path)
   bucket = parsed.netloc
@@ -63,7 +63,6 @@ def _iter_s3_filepaths(base_path: str, file_glob: str) -> tuple[_S3Path, ...]:
   if prefix:
     list_kwargs['Prefix'] = f'{prefix}/'
 
-  matches = []
   for page in paginator.paginate(**list_kwargs):
     for obj in page.get('Contents', ()):
       key = obj.get('Key', '')
@@ -71,8 +70,7 @@ def _iter_s3_filepaths(base_path: str, file_glob: str) -> tuple[_S3Path, ...]:
         continue
       rel_key = key[len(prefix) + 1 :] if prefix else key
       if PurePosixPath(rel_key).match(file_glob):
-        matches.append(_S3Path(f's3://{bucket}/{key}'))
-  return tuple(matches)
+        yield _S3Path(f's3://{bucket}/{key}')
 
 
 @dataclasses.dataclass
@@ -227,7 +225,7 @@ class AudioSources(datatypes.HopliteConfig):
   def iterate_all_sources(
       self,
       target_dataset_name: str | None = None,
-      files: Sequence[FileEntry] | None = None,
+      files: Iterable[FileEntry] | None = None,
   ) -> Iterator[SourceId]:
     """Yields all sources for all datasets (or just a single dataset).
 
@@ -238,9 +236,8 @@ class AudioSources(datatypes.HopliteConfig):
       SourceId objects.
     """
     if files is None:
-      files = tuple(self.iterate_files(target_dataset_name))
-    file_iterator = files
-    for glob, file_id, filepath in tqdm.tqdm(file_iterator):
+      files = self.iterate_files(target_dataset_name)
+    for glob, file_id, filepath in tqdm.tqdm(files):
       shard_len_s = glob.shard_len_s
       max_shards_per_file = glob.max_shards_per_file
 
