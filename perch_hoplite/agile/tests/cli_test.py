@@ -124,7 +124,7 @@ class CliTest(absltest.TestCase):
     self.assertEqual(self.colab_utils.load_configs.call_args.kwargs['db_dsn'], 'postgresql://localhost/hoplite')
     self.assertEqual(
       self.colab_utils.load_configs.call_args.kwargs['qdrant_url'],
-      'https://qdrant.example:443',
+      'https://qdrant.example:6333',
     )
     self.assertEqual(
       self.colab_utils.load_configs.call_args.kwargs['qdrant_collection_name'],
