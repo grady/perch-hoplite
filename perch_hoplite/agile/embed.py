@@ -558,6 +558,7 @@ class EmbedWorker:
               embeddings_batch,
               handle_duplicates=dupe_strategy,
           )
+          self.db.commit()
     self.db.commit()
     close_worker_dbs(state)
 
