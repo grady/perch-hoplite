@@ -523,56 +523,58 @@ class EmbedWorker:
             self.audio_sources.iterate_all_sources(target_dataset_name)
         )
       source_iterator = iter(sources)
-      for source_ids_batch in batched(source_iterator, batch_size):
-        recording_timestamps = [
-            self.get_recording_timestamp(s.file_id, s.dataset_name)
-            for s in source_ids_batch
-        ]
-        got = executor.map(
-            process_source_id,
-            itertools.repeat(state),
-            source_ids_batch,
-            itertools.repeat(self.window_size_s),
-            recording_timestamps,
-        )
-        # TODO(tomdenton): Consider using a db writer thread to avoid blocking.
-        for result in got:
-          if result is None:
-            continue
-          recording_ids = []
-          for s in result[0]:
-            deployment_id = self._get_or_insert_deployment_id(
-                s.deployment_name_from_file_id(), s.dataset_name
-            )
-            recording_id, _ = self._get_or_insert_recording_id(
-                s.file_id, deployment_id, s.dataset_name
-            )
-            recording_ids.append(recording_id)
-          if all(r in new_recordings for r in recording_ids):
-            dupe_strategy = 'allow'
-          else:
-            dupe_strategy = handle_duplicates
-          _, offsets_list, embs_list, timestamps_list = result
-
-          windows_batch = []
-          for _, (rec_id, o, ts) in enumerate(
-              zip(recording_ids, offsets_list, timestamps_list)
-          ):
-            win_dict = {
-                'recording_id': rec_id,
-                'offsets': o,
-            }
-            if ts is not None:
-              win_dict['timestamp'] = ts
-            windows_batch.append(win_dict)
-
-          embeddings_batch = np.array(embs_list)
-          self.db.insert_windows_batch(
-              windows_batch,
-              embeddings_batch,
-              handle_duplicates=dupe_strategy,
+      with tqdm.tqdm(total=len(sources), desc='Embedding audio') as progress:
+        for source_ids_batch in batched(source_iterator, batch_size):
+          recording_timestamps = [
+              self.get_recording_timestamp(s.file_id, s.dataset_name)
+              for s in source_ids_batch
+          ]
+          got = executor.map(
+              process_source_id,
+              itertools.repeat(state),
+              source_ids_batch,
+              itertools.repeat(self.window_size_s),
+              recording_timestamps,
           )
-          self.db.commit()
+          # TODO(tomdenton): Consider using a db writer thread to avoid blocking.
+          for result in got:
+            progress.update()
+            if result is None:
+              continue
+            recording_ids = []
+            for s in result[0]:
+              deployment_id = self._get_or_insert_deployment_id(
+                  s.deployment_name_from_file_id(), s.dataset_name
+              )
+              recording_id, _ = self._get_or_insert_recording_id(
+                  s.file_id, deployment_id, s.dataset_name
+              )
+              recording_ids.append(recording_id)
+            if all(r in new_recordings for r in recording_ids):
+              dupe_strategy = 'allow'
+            else:
+              dupe_strategy = handle_duplicates
+            _, offsets_list, embs_list, timestamps_list = result
+
+            windows_batch = []
+            for _, (rec_id, o, ts) in enumerate(
+                zip(recording_ids, offsets_list, timestamps_list)
+            ):
+              win_dict = {
+                  'recording_id': rec_id,
+                  'offsets': o,
+              }
+              if ts is not None:
+                win_dict['timestamp'] = ts
+              windows_batch.append(win_dict)
+
+            embeddings_batch = np.array(embs_list)
+            self.db.insert_windows_batch(
+                windows_batch,
+                embeddings_batch,
+                handle_duplicates=dupe_strategy,
+            )
+            self.db.commit()
     self.db.commit()
     close_worker_dbs(state)
 
