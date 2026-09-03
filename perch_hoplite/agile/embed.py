@@ -65,6 +65,14 @@ def worker_initializer(state):
   state[name + 'db'] = state['db'].thread_split()
 
 
+def close_worker_dbs(state):
+  for name, db in state.items():
+    if name.endswith('db') and db is not state['db']:
+      close = getattr(db, 'close', None)
+      if close is not None:
+        close()
+
+
 def process_source_id(
     state,
     source_id: source_info.SourceId,
@@ -551,6 +559,7 @@ class EmbedWorker:
               handle_duplicates=dupe_strategy,
           )
     self.db.commit()
+    close_worker_dbs(state)
 
   def get_sample_rate_hz(self, source_id: source_info.SourceId) -> int:
     """Get the sample rate of the embedding model."""

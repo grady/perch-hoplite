@@ -458,67 +458,75 @@ class PgQdrantDB(interface.HopliteDBInterface):
       A new ``PgQdrantDB`` instance.
     """
     db = psycopg2.connect(db_dsn)
-    cursor = db.cursor()
+    try:
+      if not readonly:
+        with db.cursor() as cursor:
+          cls._setup_tables(cursor)
+        db.commit()
 
-    if not readonly:
-      cls._setup_tables(cursor)
-      db.commit()
+      # Load or validate qdrant_cfg from metadata.
+      with db.cursor() as cursor:
+        cursor.execute(
+            'SELECT value FROM hoplite_metadata WHERE key = %s',
+            (QDRANT_CONFIG_KEY,),
+        )
+        row = cursor.fetchone()
+      stored_cfg = config_dict.ConfigDict(json.loads(row[0])) if row else None
 
-    # Load or validate qdrant_cfg from metadata.
-    cursor.execute(
-        'SELECT value FROM hoplite_metadata WHERE key = %s',
-        (QDRANT_CONFIG_KEY,),
-    )
-    row = cursor.fetchone()
-    stored_cfg = config_dict.ConfigDict(json.loads(row[0])) if row else None
+      # A SELECT starts a transaction in psycopg2 even though it writes
+      # nothing. End that transaction before returning the live DB object.
+      db.rollback()
 
-    if stored_cfg is not None and qdrant_cfg is not None:
-      if stored_cfg != qdrant_cfg:
+      if stored_cfg is not None and qdrant_cfg is not None:
+        if stored_cfg != qdrant_cfg:
+          raise ValueError(
+              'A qdrant_cfg was provided, but a different one is already stored'
+              ' in the database.'
+          )
+      if stored_cfg is not None:
+        qdrant_cfg = stored_cfg
+      elif qdrant_cfg is None:
         raise ValueError(
-            'A qdrant_cfg was provided, but a different one is already stored'
-            ' in the database.'
+            'No qdrant_cfg was found in the database and none was provided.'
         )
-    if stored_cfg is not None:
-      qdrant_cfg = stored_cfg
-    elif qdrant_cfg is None:
-      raise ValueError(
-          'No qdrant_cfg was found in the database and none was provided.'
+
+      collection_name = qdrant_cfg.collection_name
+      embedding_dim = int(qdrant_cfg.embedding_dim)
+
+      # Build the Qdrant client and ensure the collection exists.
+      qc = _make_qdrant_client(qdrant_cfg)
+      if readonly:
+        existing = {c.name for c in qc.get_collections().collections}
+        if collection_name not in existing:
+          raise FileNotFoundError(
+              f"Qdrant collection '{collection_name}' not found."
+          )
+        _validate_qdrant_collection(qc, collection_name, embedding_dim)
+      else:
+        _create_qdrant_collection(
+            qc, collection_name, embedding_dim, qdrant_cfg.metric_name
+        )
+        _validate_qdrant_collection(qc, collection_name, embedding_dim)
+
+      hoplite_db = cls(
+          _db_dsn=db_dsn,
+          _qdrant_cfg=qdrant_cfg,
+          db=db,
+          qc=qc,
+          _collection_name=collection_name,
+          _embedding_dim=embedding_dim,
+          _embedding_dtype=np.float32,
+          _readonly=readonly,
       )
 
-    collection_name = qdrant_cfg.collection_name
-    embedding_dim = int(qdrant_cfg.embedding_dim)
+      if not readonly and stored_cfg is None:
+        hoplite_db.insert_metadata(QDRANT_CONFIG_KEY, qdrant_cfg)
+        hoplite_db.commit()
 
-    # Build the Qdrant client and ensure the collection exists.
-    qc = _make_qdrant_client(qdrant_cfg)
-    if readonly:
-      existing = {c.name for c in qc.get_collections().collections}
-      if collection_name not in existing:
-        raise FileNotFoundError(
-            f"Qdrant collection '{collection_name}' not found."
-        )
-      _validate_qdrant_collection(qc, collection_name, embedding_dim)
-    else:
-      _create_qdrant_collection(
-          qc, collection_name, embedding_dim, qdrant_cfg.metric_name
-      )
-      _validate_qdrant_collection(qc, collection_name, embedding_dim)
-
-    hoplite_db = cls(
-        _db_dsn=db_dsn,
-        _qdrant_cfg=qdrant_cfg,
-        db=db,
-        qc=qc,
-        _collection_name=collection_name,
-        _embedding_dim=embedding_dim,
-        _embedding_dtype=np.float32,
-        _readonly=readonly,
-    )
-
-    if not readonly and stored_cfg is None:
-      hoplite_db.insert_metadata(QDRANT_CONFIG_KEY, qdrant_cfg)
-      hoplite_db.commit()
-
-    return hoplite_db
+      return hoplite_db
+    except Exception:
+      db.close()
+      raise
 
   # ------------------------------------------------------------------
   # Private helpers
@@ -747,6 +755,12 @@ class PgQdrantDB(interface.HopliteDBInterface):
     if self._cursor is not None:
       self._cursor.close()
       self._cursor = None
+
+  def close(self) -> None:
+    if self._cursor is not None:
+      self._cursor.close()
+      self._cursor = None
+    self.db.close()
 
   def thread_split(self) -> 'PgQdrantDB':
     return self.create(
