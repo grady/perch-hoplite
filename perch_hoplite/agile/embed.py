@@ -446,7 +446,6 @@ class EmbedWorker:
             source.dataset_name,
         )
         new_recordings.add(recording_id)
-      self.db.commit()
     self.db.commit()
     return new_recordings
 
