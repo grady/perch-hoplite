@@ -199,7 +199,7 @@ class EmbedWorker:
     db_audio_sources = source_info.AudioSources.from_config_dict(
         db_metadata['audio_sources']
     )
-    merged = self.audio_sources.merge_update(db_audio_sources)
+    merged = db_audio_sources.merge_update(self.audio_sources)
     self.db.insert_metadata('audio_sources', merged.to_config_dict())
     self.audio_sources = merged
 

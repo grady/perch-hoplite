@@ -15,6 +15,7 @@
 
 """Tests for embedding audio."""
 
+import dataclasses
 import datetime
 import os
 import shutil
@@ -268,6 +269,24 @@ class DuplicateHandlingTest(absltest.TestCase):
     self.assertEqual(db.count_embeddings(), 2)
     worker.process_all(handle_duplicates='allow')
     self.assertEqual(db.count_embeddings(), 4)
+
+  def test_current_audio_source_config_overrides_stored_config(self):
+    db = db_loader.create_new_usearch_db(db_path=self.db_path, embedding_dim=32)
+    worker = embed.EmbedWorker(self.audio_sources, self.model_config, db)
+    worker.update_configs()
+
+    updated_sources = source_info.AudioSources((
+        dataclasses.replace(self.audio_sources.audio_globs[0], file_glob='*.flac'),
+    ))
+    updated_worker = embed.EmbedWorker(
+        updated_sources, self.model_config, db
+    )
+    updated_worker.update_configs()
+
+    stored_sources = source_info.AudioSources.from_config_dict(
+        db.get_metadata('audio_sources')
+    )
+    self.assertEqual(stored_sources.audio_globs[0].file_glob, '*.flac')
 
   def test_timestamp_resolver(self):
     db = db_loader.create_new_usearch_db(db_path=self.db_path, embedding_dim=32)

@@ -339,6 +339,7 @@ def _make_qdrant_client(qdrant_cfg: config_dict.ConfigDict) -> QdrantClient:
     return QdrantClient(
         url=qdrant_cfg.url,
         api_key=os.environ.get('HOPLITE_QDRANT_API_KEY'),
+        prefer_grpc=True
     )
   raise ValueError(
       f"Unknown Qdrant mode: '{mode}'. Expected 'memory', 'local', or"
