@@ -72,7 +72,7 @@ class JobQueue:
 
   def start(self) -> None:
     """Loads the embedding service and starts the worker thread."""
-    if self._executor is not None:
+    if self._dispatcher is not None:
       return
     _LOG.info("Loading embedding service at startup")
     self._service = self._service_factory()

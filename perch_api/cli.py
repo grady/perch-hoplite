@@ -3,13 +3,78 @@
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+import time
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
 
 import click
+import httpx
 from tqdm import tqdm
 
 from perch_api.service import EmbeddingService
+from perch_api.config import Settings
 from perch_api.storage import S3ObjectRef, S3Storage
-from perch_api.vector_store import VectorWriter
+from perch_api.vector_store import QdrantStore, VectorWriter
+
+
+def _s3_event(ref: S3ObjectRef) -> dict:
+  return {
+      "Records": [{
+          "s3": {
+              "bucket": {"name": ref.bucket},
+              "object": {
+                  "key": ref.key,
+                  "eTag": ref.etag,
+                  "versionId": ref.version_id,
+              },
+          }
+      }]
+  }
+
+
+def _retry_delay(response: httpx.Response, attempt: int, backoff: float) -> float:
+  retry_after = response.headers.get("Retry-After")
+  if retry_after:
+    try:
+      return max(0.0, float(retry_after))
+    except ValueError:
+      try:
+        retry_at = parsedate_to_datetime(retry_after)
+        if retry_at.tzinfo is None:
+          retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+      except (TypeError, ValueError, OverflowError):
+        pass
+  return backoff * (2**attempt)
+
+
+def submit_webhook(
+    ref: S3ObjectRef,
+    webhook_url: str,
+    retries: int,
+    backoff: float,
+) -> str:
+  for attempt in range(retries + 1):
+    try:
+      response = httpx.post(webhook_url, json=_s3_event(ref), timeout=30.0)
+    except httpx.HTTPError as exc:
+      raise click.ClickException(f"Webhook request failed for {ref.uri}: {exc}") from exc
+    if response.status_code == 202:
+      try:
+        job_ids = response.json()["job_ids"]
+        return job_ids[0]
+      except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise click.ClickException(
+            f"Webhook returned an invalid response for {ref.uri}"
+        ) from exc
+    if response.status_code != 503 or attempt >= retries:
+      detail = response.text.strip()
+      raise click.ClickException(
+          f"Webhook returned HTTP {response.status_code} for {ref.uri}"
+          + (f": {detail}" if detail else "")
+      )
+    time.sleep(_retry_delay(response, attempt, backoff))
+  raise AssertionError("unreachable")
 
 
 @click.command()
@@ -47,6 +112,25 @@ from perch_api.vector_store import VectorWriter
     is_flag=True,
     help="Re-embed objects that already have vectors in Qdrant.",
 )
+@click.option(
+  "--webhook-url",
+  envvar="PERCH_API_WEBHOOK_URL",
+  help="Submit jobs to the API webhook instead of processing locally.",
+)
+@click.option(
+  "--webhook-retries",
+  type=click.IntRange(min=0),
+  default=5,
+  show_default=True,
+  help="Retries after HTTP 503 responses.",
+)
+@click.option(
+  "--webhook-backoff",
+  type=click.FloatRange(min=0),
+  default=1.0,
+  show_default=True,
+  help="Initial seconds to wait between HTTP 503 retries.",
+)
 def ingest(
   object_uris,
   bucket,
@@ -56,6 +140,9 @@ def ingest(
   show_progress,
   workers,
   no_skip_existing,
+  webhook_url,
+  webhook_retries,
+  webhook_backoff,
 ) -> None:
   """Ingest explicit S3 objects or all audio objects under a prefix."""
   if not object_uris and not bucket:
@@ -74,6 +161,37 @@ def ingest(
   if dry_run:
     for ref in refs:
       click.echo(ref.uri)
+    return
+
+  if webhook_url:
+    settings = Settings.from_env()
+    vectors = None
+    if not no_skip_existing:
+      vectors = QdrantStore(
+          url=settings.qdrant_url,
+          api_key=settings.qdrant_api_key,
+          collection=settings.qdrant_collection,
+          timeout=settings.qdrant_timeout_s,
+      )
+    progress = tqdm(total=len(refs), desc="Submitting", unit="file") if show_progress else None
+    try:
+      for ref in refs:
+        if vectors is not None and vectors.has_vectors(ref, settings.model_name):
+          if progress is None:
+            click.echo(f"{ref.uri}: skipped, vectors already exist")
+          else:
+            progress.update(1)
+          continue
+        job_id = submit_webhook(
+            ref, webhook_url, webhook_retries, webhook_backoff
+        )
+        if progress is None:
+          click.echo(f"{ref.uri}: submitted job {job_id}")
+        else:
+          progress.update(1)
+    finally:
+      if progress is not None:
+        progress.close()
     return
 
   service = EmbeddingService.from_env()
