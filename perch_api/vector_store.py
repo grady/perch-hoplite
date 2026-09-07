@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from dataclasses import dataclass
 from queue import Empty, Queue
-from threading import Event
+from threading import Event, Lock
 from concurrent.futures import ThreadPoolExecutor
 import uuid
 from typing import Callable, Iterable
 
+import httpx
 from qdrant_client import QdrantClient, models
 
 from perch_api.embedding import EmbeddedWindow
@@ -30,25 +32,68 @@ class QdrantStore:
       collection: str,
       api_key: str | None = None,
       timeout: float = 30.0,
+      retries: int = 3,
       client=None,
   ):
     self.client = client or QdrantClient(url=url, api_key=api_key, timeout=timeout)
     self.collection = collection
+    self._retries = retries
+    self._collection_exists: bool | None = None
+    self._collection_lock = Lock()
+
+  def _request(self, operation):
+    for attempt in range(self._retries + 1):
+      try:
+        return operation()
+      except httpx.TransportError:
+        if attempt >= self._retries:
+          raise
+        time.sleep(0.5 * (2**attempt))
 
   def ensure_collection(self, vector_size: int) -> None:
-    if self.client.collection_exists(self.collection):
+    if self._collection_is_available():
       return
-    self.client.create_collection(
-        collection_name=self.collection,
-        vectors_config=models.VectorParams(
-            size=vector_size, distance=models.Distance.DOT
+    self._request(
+        lambda: self.client.create_collection(
+            collection_name=self.collection,
+            vectors_config=models.VectorParams(
+                size=vector_size, distance=models.Distance.DOT
+            ),
         ),
     )
+    self._collection_exists = True
+
+  def _collection_is_available(self) -> bool:
+    if self._collection_exists is not None:
+      return self._collection_exists
+    with self._collection_lock:
+      if self._collection_exists is None:
+        self._collection_exists = self._request(
+            lambda: self.client.collection_exists(self.collection)
+        )
+    return self._collection_exists
 
   def has_vectors(self, ref: S3ObjectRef, model_name: str) -> bool:
     """Returns whether Qdrant already contains vectors for this object."""
-    if not self.client.collection_exists(self.collection):
+    if not self._collection_is_available():
       return False
+    conditions = self._identity_conditions(ref, model_name)
+    conditions.append(
+      models.FieldCondition(key="complete", match=models.MatchValue(value=True))
+    )
+    records, _ = self._request(
+      lambda: self.client.scroll(
+        collection_name=self.collection,
+        scroll_filter=models.Filter(must=conditions),
+        limit=1,
+        with_payload=False,
+        with_vectors=False,
+      )
+    )
+    return bool(records)
+
+  @staticmethod
+  def _identity_conditions(ref: S3ObjectRef, model_name: str):
     conditions = [
         models.FieldCondition(
             key="source", match=models.MatchValue(value=ref.uri)
@@ -69,14 +114,7 @@ class QdrantStore:
               key="etag", match=models.MatchValue(value=ref.etag)
           )
       )
-    records, _ = self.client.scroll(
-        collection_name=self.collection,
-        scroll_filter=models.Filter(must=conditions),
-        limit=1,
-        with_payload=False,
-        with_vectors=False,
-    )
-    return bool(records)
+    return conditions
 
   def upsert(
       self,
@@ -98,6 +136,7 @@ class QdrantStore:
                 "version_id": ref.version_id,
                 "etag": ref.etag,
                 "model": model_name,
+                "complete": False,
                 "frame_index": window.frame_index,
                 "channel_index": window.channel_index,
                 "start_s": window.start_s,
@@ -117,11 +156,23 @@ class QdrantStore:
         for window in windows
     ]
     for start in range(0, len(points), batch_size):
-      self.client.upsert(
-          collection_name=self.collection,
-          points=points[start : start + batch_size],
-          wait=True,
+        self._request(
+          lambda: self.client.upsert(
+            collection_name=self.collection,
+            points=points[start : start + batch_size],
+            wait=True,
+          )
       )
+        self._request(
+          lambda: self.client.set_payload(
+            collection_name=self.collection,
+            payload={"complete": True},
+            points=models.Filter(
+              must=self._identity_conditions(ref, model_name)
+            ),
+            wait=True,
+          )
+        )
     return len(points)
 
   @staticmethod
@@ -199,3 +250,17 @@ class VectorWriter:
     self._executor.shutdown(wait=True)
     if self._error is not None:
       raise self._error
+
+  def abort(self) -> None:
+    """Stops accepting queued writes without waiting for the queue to drain."""
+    if self._executor is None:
+      return
+    while True:
+      try:
+        self._queue.get_nowait()
+      except Empty:
+        break
+      else:
+        self._queue.task_done()
+    self._stop.set()
+    self._executor.shutdown(wait=False, cancel_futures=True)
