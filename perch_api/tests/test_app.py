@@ -1,6 +1,7 @@
 """Tests for webhook parsing and deterministic job IDs."""
 
 import unittest
+from unittest import mock
 
 from perch_api.app import JobQueue, refs_from_event
 from perch_api.storage import S3ObjectRef
@@ -31,6 +32,47 @@ class AppTest(unittest.TestCase):
     self.assertNotEqual(
         JobQueue.job_id(first), JobQueue.job_id(S3ObjectRef("audio", "bird.wav"))
     )
+
+  def test_refs_from_event_skips_records_without_bucket_or_key(self):
+    refs = refs_from_event(
+        {
+            "Records": [
+                {"s3": {"bucket": {"name": "audio"}, "object": {}}},
+                {"s3": {"bucket": {}, "object": {"key": "bird.wav"}}},
+                {"s3": {"bucket": {"name": "audio"}, "object": {"key": "ok.wav"}}},
+            ]
+        }
+    )
+
+    self.assertEqual(refs, [S3ObjectRef("audio", "ok.wav")])
+
+  def test_refs_from_event_decodes_plus_in_key_and_preserves_version(self):
+    refs = refs_from_event(
+        {
+            "Records": [
+                {
+                    "s3": {
+                        "bucket": {"name": "audio"},
+                        "object": {
+                            "key": "folder%2Fbird+call.wav",
+                            "versionId": "v1",
+                        },
+                    }
+                }
+            ]
+        }
+    )
+
+    self.assertEqual(
+        refs, [S3ObjectRef("audio", "folder/bird call.wav", version_id="v1")]
+    )
+
+  def test_submit_raises_when_queue_is_full(self):
+    queue = JobQueue(lambda: mock.sentinel.service, maxsize=1)
+    with mock.patch.object(queue, "start"):
+      queue.submit(S3ObjectRef("audio", "one.wav"))
+      with self.assertRaisesRegex(RuntimeError, "queue is full"):
+        queue.submit(S3ObjectRef("audio", "two.wav"))
 
 
 if __name__ == "__main__":
