@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import asynccontextmanager
 import hashlib
 import logging
@@ -16,6 +16,7 @@ import numpy as np
 
 from perch_api.service import EmbeddingService
 from perch_api.storage import S3ObjectRef
+from perch_api.vector_store import VectorWriter
 
 _LOG = logging.getLogger(__name__)
 _LOG.setLevel(logging.INFO)
@@ -51,15 +52,17 @@ class JobQueue:
     self._jobs: Queue[S3ObjectRef] = Queue(maxsize=maxsize)
     self._stop = Event()
     self._workers = workers
-    self._executor: ThreadPoolExecutor | None = None
+    self._dispatcher: ThreadPoolExecutor | None = None
+    self._loader: ThreadPoolExecutor | None = None
     self._service: EmbeddingService | None = None
+    self._writer: VectorWriter | None = None
 
   @staticmethod
   def job_id(ref: S3ObjectRef) -> str:
     return hashlib.sha256(ref.identity.encode("utf-8")).hexdigest()
 
   def submit(self, ref: S3ObjectRef) -> str:
-    if self._executor is None:
+    if self._dispatcher is None:
       self.start()
     try:
       self._jobs.put_nowait(ref)
@@ -81,32 +84,52 @@ class JobQueue:
       S3ObjectRef(bucket="startup", key="warmup.wav"),
     )
     _LOG.info("Embedding model warmup complete")
-    self._executor = ThreadPoolExecutor(max_workers=self._workers)
-    self._executor.submit(self._run)
-
-  def _run(self) -> None:
-    while not self._stop.is_set():
-      try:
-        ref = self._jobs.get(timeout=0.1)
-      except Empty:
-        continue
-      try:
-        _LOG.info("Starting embedding job for %s", ref.identity)
-        count = self._service.ingest(ref)
-        _LOG.info(
+    self._writer = VectorWriter(
+        self._service.vectors,
+        batch_size=self._service.settings.upsert_batch_size,
+        maxsize=self._service.settings.job_queue_size,
+        on_write=lambda ref, count: _LOG.info(
             "Embedding job completed for %s: upserted %d vectors",
             ref.identity,
             count,
-        )
-      except Exception:
-        _LOG.exception("Embedding job failed for %s", ref.identity)
-      finally:
-        self._jobs.task_done()
+        ),
+    )
+    self._loader = ThreadPoolExecutor(max_workers=self._workers)
+    self._dispatcher = ThreadPoolExecutor(max_workers=1)
+    self._dispatcher.submit(self._run)
+
+  def _run(self) -> None:
+    pending = {}
+    while not self._stop.is_set() or not self._jobs.empty() or pending:
+      while len(pending) < self._workers:
+        try:
+          ref = self._jobs.get_nowait()
+        except Empty:
+          break
+        pending[self._loader.submit(self._service.load_audio, ref)] = ref
+      if not pending:
+        self._stop.wait(0.1)
+        continue
+      completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+      for future in completed:
+        ref = pending.pop(future)
+        try:
+          _LOG.info("Starting embedding job for %s", ref.identity)
+          windows = self._service.pipeline.embed_audio(future.result(), ref)
+          self._writer.submit(ref, self._service.pipeline.model_name, windows)
+        except Exception:
+          _LOG.exception("Embedding job failed for %s", ref.identity)
+        finally:
+          self._jobs.task_done()
 
   def close(self) -> None:
     self._stop.set()
-    if self._executor is not None:
-      self._executor.shutdown(wait=False, cancel_futures=True)
+    if self._dispatcher is not None:
+      self._dispatcher.shutdown(wait=True)
+    if self._loader is not None:
+      self._loader.shutdown(wait=True)
+    if self._writer is not None:
+      self._writer.close()
 
 
 def create_app(service: EmbeddingService | None = None) -> FastAPI:
