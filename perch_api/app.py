@@ -129,7 +129,10 @@ class JobQueue:
     if self._loader is not None:
       self._loader.shutdown(wait=True)
     if self._writer is not None:
-      self._writer.close()
+      try:
+        self._writer.close()
+      except Exception:
+        _LOG.exception("Vector writer failed during API shutdown")
 
 
 def create_app(service: EmbeddingService | None = None) -> FastAPI:

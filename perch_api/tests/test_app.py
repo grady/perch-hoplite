@@ -74,6 +74,22 @@ class AppTest(unittest.TestCase):
       with self.assertRaisesRegex(RuntimeError, "queue is full"):
         queue.submit(S3ObjectRef("audio", "two.wav"))
 
+    def test_close_logs_and_contains_writer_failure(self):
+        queue = JobQueue(lambda: mock.sentinel.service)
+        queue._dispatcher = mock.Mock()
+        queue._loader = mock.Mock()
+        queue._writer = mock.Mock()
+        queue._writer.close.side_effect = RuntimeError("qdrant disconnected")
+
+        with self.assertLogs("perch_api.app", level="ERROR") as logs:
+            queue.close()
+
+        queue._dispatcher.shutdown.assert_called_once_with(wait=True)
+        queue._loader.shutdown.assert_called_once_with(wait=True)
+        queue._writer.close.assert_called_once_with()
+        self.assertIn("Vector writer failed during API shutdown", logs.output[0])
+        self.assertIn("qdrant disconnected", "\n".join(logs.output))
+
 
 if __name__ == "__main__":
   unittest.main()

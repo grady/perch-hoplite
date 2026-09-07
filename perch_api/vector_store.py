@@ -45,10 +45,23 @@ class QdrantStore:
     for attempt in range(self._retries + 1):
       try:
         return operation()
-      except httpx.TransportError:
+      except Exception as exc:
+        if not self._is_transport_error(exc):
+          raise
         if attempt >= self._retries:
           raise
         time.sleep(0.5 * (2**attempt))
+
+  @staticmethod
+  def _is_transport_error(error: Exception) -> bool:
+    seen = set()
+    current: Exception | None = error
+    while current is not None and id(current) not in seen:
+      seen.add(id(current))
+      if isinstance(current, httpx.TransportError):
+        return True
+      current = current.__cause__ or current.__context__
+    return False
 
   def ensure_collection(self, vector_size: int) -> None:
     if self._collection_is_available():

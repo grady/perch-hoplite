@@ -104,6 +104,25 @@ class QdrantStoreTest(unittest.TestCase):
     with self.assertRaises(httpx.TransportError):
       store._request(operation)
 
+  @mock.patch("perch_api.vector_store.time.sleep")
+  def test_request_retries_wrapped_transport_errors(self, sleep):
+    wrapped = RuntimeError("qdrant response handling failed")
+    wrapped.__cause__ = httpx.RemoteProtocolError("server disconnected")
+    operation = mock.Mock(side_effect=[wrapped, "ok"])
+
+    self.assertEqual(self.store._request(operation), "ok")
+
+    sleep.assert_called_once_with(0.5)
+    self.assertEqual(operation.call_count, 2)
+
+  def test_request_does_not_retry_non_transport_errors(self):
+    operation = mock.Mock(side_effect=ValueError("invalid request"))
+
+    with self.assertRaisesRegex(ValueError, "invalid request"):
+      self.store._request(operation)
+
+    operation.assert_called_once_with()
+
   def test_identity_conditions_prefer_version_id_over_etag(self):
     ref = S3ObjectRef("audio", "bird.wav", version_id="v1", etag="etag")
 
