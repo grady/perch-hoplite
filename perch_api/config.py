@@ -14,8 +14,11 @@ class Settings:
   qdrant_collection: str = "perch_embeddings"
   qdrant_timeout_s: float = 30.0
   upsert_batch_size: int = 256
-  job_queue_size: int = 32
-  job_workers: int = 1
+  job_workers: int = 4
+  job_database_path: str = "./perch_api_jobs.sqlite3"
+  job_max_attempts: int = 3
+  job_lease_s: float = 300.0
+  job_retry_backoff_s: float = 1.0
 
   @classmethod
   def from_env(cls) -> "Settings":
@@ -32,10 +35,21 @@ class Settings:
         upsert_batch_size=int(
             os.getenv("PERCH_API_UPSERT_BATCH_SIZE", str(cls.upsert_batch_size))
         ),
-        job_queue_size=int(
-            os.getenv("PERCH_API_JOB_QUEUE_SIZE", str(cls.job_queue_size))
-        ),
         job_workers=int(
             os.getenv("PERCH_API_JOB_WORKERS", str(cls.job_workers))
+        ),
+        job_database_path=os.getenv(
+            "PERCH_API_JOB_DATABASE", cls.job_database_path
+        ),
+        job_max_attempts=int(
+            os.getenv("PERCH_API_JOB_MAX_ATTEMPTS", str(cls.job_max_attempts))
+        ),
+        job_lease_s=float(
+            os.getenv("PERCH_API_JOB_LEASE_S", str(cls.job_lease_s))
+        ),
+        job_retry_backoff_s=float(
+            os.getenv(
+                "PERCH_API_JOB_RETRY_BACKOFF_S", str(cls.job_retry_backoff_s)
+            )
         ),
     )

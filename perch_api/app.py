@@ -6,7 +6,6 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import asynccontextmanager
 import hashlib
 import logging
-from queue import Empty, Full, Queue
 from threading import Event
 from typing import Any, Callable
 from urllib.parse import unquote_plus
@@ -14,6 +13,8 @@ from urllib.parse import unquote_plus
 from fastapi import FastAPI, HTTPException
 import numpy as np
 
+from perch_api.config import Settings
+from perch_api.job_queue import Job, SQLiteJobQueue
 from perch_api.service import EmbeddingService
 from perch_api.storage import S3ObjectRef
 from perch_api.vector_store import VectorWriter
@@ -45,11 +46,18 @@ class JobQueue:
   def __init__(
       self,
       service_factory: Callable[[], EmbeddingService],
-      maxsize: int = 32,
       workers: int = 1,
+      database_path: str = "./perch_api_jobs.sqlite3",
+      max_attempts: int = 3,
+      lease_s: float = 300.0,
+      retry_backoff_s: float = 1.0,
   ):
     self._service_factory = service_factory
-    self._jobs: Queue[S3ObjectRef] = Queue(maxsize=maxsize)
+    self._database_path = database_path
+    self._max_attempts = max_attempts
+    self._lease_s = lease_s
+    self._retry_backoff_s = retry_backoff_s
+    self._queue: SQLiteJobQueue | None = None
     self._stop = Event()
     self._workers = workers
     self._dispatcher: ThreadPoolExecutor | None = None
@@ -64,11 +72,7 @@ class JobQueue:
   def submit(self, ref: S3ObjectRef) -> str:
     if self._dispatcher is None:
       self.start()
-    try:
-      self._jobs.put_nowait(ref)
-    except Full as exc:
-      raise RuntimeError("Embedding job queue is full") from exc
-    return self.job_id(ref)
+    return self._queue.enqueue(ref, self._service.pipeline.model_name)
 
   def start(self) -> None:
     """Loads the embedding service and starts the worker thread."""
@@ -76,6 +80,12 @@ class JobQueue:
       return
     _LOG.info("Loading embedding service at startup")
     self._service = self._service_factory()
+    self._queue = SQLiteJobQueue(
+        self._database_path,
+        max_attempts=self._max_attempts,
+        lease_s=self._lease_s,
+        retry_backoff_s=self._retry_backoff_s,
+    )
     _LOG.info("Embedding service ready: model=%s", self._service.pipeline.model_name)
     sample_rate = self._service.pipeline.model.sample_rate
     _LOG.info("Warming embedding model with a dummy audio window")
@@ -84,43 +94,53 @@ class JobQueue:
       S3ObjectRef(bucket="startup", key="warmup.wav"),
     )
     _LOG.info("Embedding model warmup complete")
-    self._writer = VectorWriter(
-        self._service.vectors,
-        batch_size=self._service.settings.upsert_batch_size,
-        maxsize=self._service.settings.job_queue_size,
-        on_write=lambda ref, count: _LOG.info(
-            "Embedding job completed for %s: upserted %d vectors",
-            ref.identity,
-            count,
-        ),
-    )
     self._loader = ThreadPoolExecutor(max_workers=self._workers)
+    self._writer = VectorWriter(
+      self._service.vectors,
+      batch_size=self._service.settings.upsert_batch_size,
+      on_write=self._on_write,
+      on_error=self._on_write_error,
+    )
     self._dispatcher = ThreadPoolExecutor(max_workers=1)
+    self._queue.recover_stale()
     self._dispatcher.submit(self._run)
 
   def _run(self) -> None:
-    pending = {}
-    while not self._stop.is_set() or not self._jobs.empty() or pending:
-      while len(pending) < self._workers:
-        try:
-          ref = self._jobs.get_nowait()
-        except Empty:
-          break
-        pending[self._loader.submit(self._service.load_audio, ref)] = ref
+    pending: dict[Any, Job] = {}
+    while not self._stop.is_set() or pending:
+      if not self._stop.is_set():
+        for job in self._queue.claim(self._workers - len(pending)):
+          pending[self._loader.submit(self._service.load_audio, job.ref)] = job
       if not pending:
         self._stop.wait(0.1)
         continue
       completed, _ = wait(pending, return_when=FIRST_COMPLETED)
       for future in completed:
-        ref = pending.pop(future)
+        job = pending.pop(future)
         try:
-          _LOG.info("Starting embedding job for %s", ref.identity)
-          windows = self._service.pipeline.embed_audio(future.result(), ref)
-          self._writer.submit(ref, self._service.pipeline.model_name, windows)
-        except Exception:
-          _LOG.exception("Embedding job failed for %s", ref.identity)
-        finally:
-          self._jobs.task_done()
+          _LOG.info("Starting embedding job for %s", job.ref.identity)
+          windows = self._service.pipeline.embed_audio(future.result(), job.ref)
+          self._writer.submit(job.ref, job.model_name, windows)
+        except Exception as exc:
+          self._fail_job(job.ref, exc)
+
+  def _fail_job(self, ref: S3ObjectRef, error: Exception) -> None:
+    status = self._queue.fail(self.job_id(ref), str(error))
+    _LOG.error(
+        "Embedding job failed for %s; state=%s: %s",
+        ref.identity,
+        status,
+        error,
+    )
+
+  def _on_write(self, ref: S3ObjectRef, count: int) -> None:
+    self._queue.complete(self.job_id(ref))
+    _LOG.info(
+        "Embedding job completed for %s: upserted %d vectors", ref.identity, count
+    )
+
+  def _on_write_error(self, ref: S3ObjectRef, error: Exception) -> None:
+    self._fail_job(ref, error)
 
   def close(self) -> None:
     self._stop.set()
@@ -134,13 +154,15 @@ class JobQueue:
       except Exception:
         _LOG.exception("Vector writer failed during API shutdown")
 
-
 def create_app(service: EmbeddingService | None = None) -> FastAPI:
-  settings = service.settings if service is not None else None
+  settings = service.settings if service is not None else Settings.from_env()
   queue = JobQueue(
       service_factory=lambda: service or EmbeddingService.from_env(),
-      maxsize=settings.job_queue_size if settings else 32,
-      workers=settings.job_workers if settings else 1,
+      workers=settings.job_workers,
+      database_path=settings.job_database_path,
+      max_attempts=settings.job_max_attempts,
+      lease_s=settings.job_lease_s,
+      retry_backoff_s=settings.job_retry_backoff_s,
   )
   @asynccontextmanager
   async def lifespan(_api: FastAPI):
@@ -163,7 +185,7 @@ def create_app(service: EmbeddingService | None = None) -> FastAPI:
       raise HTTPException(status_code=400, detail="No S3 objects found")
     try:
       job_ids = [queue.submit(ref) for ref in refs]
-    except RuntimeError as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
       raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"job_ids": job_ids}
 

@@ -1,9 +1,13 @@
 """Tests for webhook parsing and deterministic job IDs."""
 
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from perch_api.app import JobQueue, refs_from_event
+from perch_api.job_queue import SQLiteJobQueue
 from perch_api.storage import S3ObjectRef
 
 
@@ -67,28 +71,29 @@ class AppTest(unittest.TestCase):
         refs, [S3ObjectRef("audio", "folder/bird call.wav", version_id="v1")]
     )
 
-  def test_submit_raises_when_queue_is_full(self):
-    queue = JobQueue(lambda: mock.sentinel.service, maxsize=1)
-    with mock.patch.object(queue, "start"):
-      queue.submit(S3ObjectRef("audio", "one.wav"))
-      with self.assertRaisesRegex(RuntimeError, "queue is full"):
-        queue.submit(S3ObjectRef("audio", "two.wav"))
+  def test_submit_is_not_limited_by_worker_buffer_size(self):
+    service = SimpleNamespace(pipeline=SimpleNamespace(model_name="perch_v2"))
+    with tempfile.TemporaryDirectory() as tempdir:
+      queue = JobQueue(
+          lambda: service,
+          database_path=Path(tempdir) / "jobs.sqlite3",
+      )
+      queue._service = service
+      queue._queue = SQLiteJobQueue(Path(tempdir) / "jobs.sqlite3")
+      queue._dispatcher = mock.Mock()
+      first = S3ObjectRef("audio", "one.wav")
+      second = S3ObjectRef("audio", "two.wav")
+      self.assertEqual(queue.submit(first), JobQueue.job_id(first))
+      self.assertEqual(queue.submit(second), JobQueue.job_id(second))
 
-    def test_close_logs_and_contains_writer_failure(self):
-        queue = JobQueue(lambda: mock.sentinel.service)
-        queue._dispatcher = mock.Mock()
-        queue._loader = mock.Mock()
-        queue._writer = mock.Mock()
-        queue._writer.close.side_effect = RuntimeError("qdrant disconnected")
+  def test_close_waits_for_dispatcher_and_loader(self):
+    queue = JobQueue(lambda: mock.sentinel.service)
+    queue._dispatcher = mock.Mock()
+    queue._loader = mock.Mock()
+    queue.close()
 
-        with self.assertLogs("perch_api.app", level="ERROR") as logs:
-            queue.close()
-
-        queue._dispatcher.shutdown.assert_called_once_with(wait=True)
-        queue._loader.shutdown.assert_called_once_with(wait=True)
-        queue._writer.close.assert_called_once_with()
-        self.assertIn("Vector writer failed during API shutdown", logs.output[0])
-        self.assertIn("qdrant disconnected", "\n".join(logs.output))
+    queue._dispatcher.shutdown.assert_called_once_with(wait=True)
+    queue._loader.shutdown.assert_called_once_with(wait=True)
 
 
 if __name__ == "__main__":

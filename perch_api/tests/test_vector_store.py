@@ -148,12 +148,17 @@ class VectorWriterTest(unittest.TestCase):
   def test_close_propagates_worker_error(self):
     store = mock.MagicMock()
     store.upsert.side_effect = RuntimeError("write failed")
-    writer = VectorWriter(store)
+    callback = mock.Mock()
+    writer = VectorWriter(store, on_error=callback)
+    ref = S3ObjectRef("audio", "bird.wav")
 
-    writer.submit(S3ObjectRef("audio", "bird.wav"), "perch_v2", [])
+    writer.submit(ref, "perch_v2", [])
 
     with self.assertRaisesRegex(RuntimeError, "write failed"):
       writer.close()
+    callback.assert_called_once()
+    self.assertEqual(callback.call_args.args[0], ref)
+    self.assertIsInstance(callback.call_args.args[1], RuntimeError)
 
   def test_abort_discards_queued_writes(self):
     store = mock.MagicMock()

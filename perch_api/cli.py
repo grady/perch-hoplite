@@ -210,7 +210,6 @@ def ingest(
   writer = VectorWriter(
       service.vectors,
       batch_size=service.settings.upsert_batch_size,
-      maxsize=service.settings.job_queue_size,
       on_write=on_write,
   )
   executor = ThreadPoolExecutor(max_workers=workers)

@@ -128,6 +128,23 @@ pip install 'perch-hoplite[jax]'
 If installing with uv in editable mode, you can use
 `uv pip install -e '.[tf,jax]'`.
 
+## Embedding API Queue
+
+The embedding webhook persists accepted S3 requests in a local SQLite database
+before returning HTTP 202. The default database is
+`./perch_api_jobs.sqlite3`; set `PERCH_API_JOB_DATABASE` to a path on persistent
+writable storage in deployments. The API resumes pending or interrupted jobs
+after restart and uses deterministic vector IDs, so processing is at-least-once
+and safe to retry.
+
+Queue behavior can be adjusted with `PERCH_API_JOB_MAX_ATTEMPTS`,
+`PERCH_API_JOB_LEASE_S`, `PERCH_API_JOB_RETRY_BACKOFF_S`,
+and `PERCH_API_JOB_WORKERS`. The workers load audio in parallel; GPU embedding
+remains serialized and Qdrant writes use a separate bounded writer thread. Jobs that exhaust their
+automatic retries remain in the SQLite database as failed records for later
+inspection or replay. This queue currently assumes one API process; its worker
+threads may share the database safely.
+
 ## Disclaimer
 
 This is not an officially supported Google product. This project is not eligible

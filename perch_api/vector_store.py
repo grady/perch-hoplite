@@ -208,10 +208,12 @@ class VectorWriter:
       batch_size: int = 256,
       maxsize: int = 32,
       on_write: Callable[[S3ObjectRef, int], None] | None = None,
+        on_error: Callable[[S3ObjectRef, Exception], None] | None = None,
   ):
     self._store = store
     self._batch_size = batch_size
     self._on_write = on_write
+    self._on_error = on_error
     self._queue: Queue[VectorWrite] = Queue(maxsize=maxsize)
     self._stop = Event()
     self._executor: ThreadPoolExecutor | None = None
@@ -245,12 +247,16 @@ class VectorWriter:
           self._on_write(write.ref, count)
       except Exception as exc:
         self._error = exc
+        if self._on_error is not None:
+          self._on_error(write.ref, exc)
         while True:
           try:
-            self._queue.get_nowait()
+            discarded = self._queue.get_nowait()
           except Empty:
             break
           else:
+            if self._on_error is not None:
+              self._on_error(discarded.ref, exc)
             self._queue.task_done()
       finally:
         self._queue.task_done()
