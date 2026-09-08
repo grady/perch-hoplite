@@ -43,7 +43,7 @@ class QdrantStoreTest(unittest.TestCase):
         ["source", "model", "etag", "complete"],
     )
 
-  def test_upsert_batches_points_and_marks_file_complete_once(self):
+  def test_upsert_batches_points_as_complete_without_payload_overwrite(self):
     self.client.collection_exists.return_value = False
     windows = [
         EmbeddedWindow(
@@ -69,15 +69,11 @@ class QdrantStoreTest(unittest.TestCase):
     self.assertEqual(count, 2)
     self.client.create_collection.assert_called_once()
     self.assertEqual(self.client.upsert.call_count, 2)
-    self.client.set_payload.assert_called_once()
+    self.client.set_payload.assert_not_called()
     first_point = self.client.upsert.call_args_list[0].kwargs["points"][0]
-    self.assertEqual(first_point.payload["complete"], False)
+    self.assertEqual(first_point.payload["complete"], True)
     self.assertEqual(first_point.payload["start_time"], "2024-01-01T00:00:00+00:00")
     self.assertEqual(first_point.payload["end_time"], "2024-01-01T00:00:05+00:00")
-    self.assertEqual(
-        self.client.set_payload.call_args_list[0].kwargs["payload"],
-        {"complete": True},
-    )
 
   def test_upsert_empty_windows_does_not_touch_client(self):
     self.assertEqual(self.store.upsert(self.ref, "perch_v2", []), 0)

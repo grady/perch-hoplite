@@ -149,7 +149,7 @@ class QdrantStore:
                 "version_id": ref.version_id,
                 "etag": ref.etag,
                 "model": model_name,
-                "complete": False,
+                "complete": True,
                 "frame_index": window.frame_index,
                 "channel_index": window.channel_index,
                 "start_s": window.start_s,
@@ -176,16 +176,6 @@ class QdrantStore:
             wait=True,
           )
       )
-    self._request(
-      lambda: self.client.set_payload(
-        collection_name=self.collection,
-        payload={"complete": True},
-        points=models.Filter(
-          must=self._identity_conditions(ref, model_name)
-        ),
-        wait=True,
-      )
-    )
     return len(points)
 
   @staticmethod
