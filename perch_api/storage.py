@@ -52,7 +52,7 @@ class S3Storage:
         yield S3ObjectRef(
             bucket=bucket,
             key=item["Key"],
-            etag=item.get("ETag"),
+            etag=item.get("ETag", "").strip('"') or None,
         )
 
   @contextmanager

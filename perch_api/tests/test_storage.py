@@ -44,7 +44,7 @@ class S3StorageTest(unittest.TestCase):
   def test_list_returns_objects_from_all_pages(self):
     paginator = self.client.get_paginator.return_value
     paginator.paginate.return_value = [
-        {"Contents": [{"Key": "one.wav", "ETag": "etag-1"}]},
+        {"Contents": [{"Key": "one.wav", "ETag": '"etag-1"'}]},
         {"Contents": [],},
         {"Contents": [{"Key": "two.flac"}]},
     ]
