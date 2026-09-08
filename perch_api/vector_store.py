@@ -206,7 +206,7 @@ class VectorWriter:
       self,
       store: QdrantStore,
       batch_size: int = 256,
-      maxsize: int = 32,
+      maxsize: int = 4,
       on_write: Callable[[S3ObjectRef, int], None] | None = None,
         on_error: Callable[[S3ObjectRef, Exception], None] | None = None,
   ):
