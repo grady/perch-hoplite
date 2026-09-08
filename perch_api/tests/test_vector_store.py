@@ -43,7 +43,7 @@ class QdrantStoreTest(unittest.TestCase):
         ["source", "model", "etag", "complete"],
     )
 
-  def test_upsert_batches_points_and_marks_each_batch_complete(self):
+  def test_upsert_batches_points_and_marks_file_complete_once(self):
     self.client.collection_exists.return_value = False
     windows = [
         EmbeddedWindow(
@@ -69,7 +69,7 @@ class QdrantStoreTest(unittest.TestCase):
     self.assertEqual(count, 2)
     self.client.create_collection.assert_called_once()
     self.assertEqual(self.client.upsert.call_count, 2)
-    self.assertEqual(self.client.set_payload.call_count, 2)
+    self.client.set_payload.assert_called_once()
     first_point = self.client.upsert.call_args_list[0].kwargs["points"][0]
     self.assertEqual(first_point.payload["complete"], False)
     self.assertEqual(first_point.payload["start_time"], "2024-01-01T00:00:00+00:00")

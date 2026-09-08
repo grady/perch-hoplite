@@ -176,16 +176,16 @@ class QdrantStore:
             wait=True,
           )
       )
-        self._request(
-          lambda: self.client.set_payload(
-            collection_name=self.collection,
-            payload={"complete": True},
-            points=models.Filter(
-              must=self._identity_conditions(ref, model_name)
-            ),
-            wait=True,
-          )
-        )
+    self._request(
+      lambda: self.client.set_payload(
+        collection_name=self.collection,
+        payload={"complete": True},
+        points=models.Filter(
+          must=self._identity_conditions(ref, model_name)
+        ),
+        wait=True,
+      )
+    )
     return len(points)
 
   @staticmethod
