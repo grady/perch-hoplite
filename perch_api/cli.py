@@ -77,6 +77,19 @@ def submit_webhook(
   raise AssertionError("unreachable")
 
 
+def _check_and_submit_webhook(
+    ref: S3ObjectRef,
+    vectors: QdrantStore | None,
+    model_name: str,
+    webhook_url: str,
+    webhook_retries: int,
+    webhook_backoff: float,
+) -> tuple[S3ObjectRef, str | None]:
+  if vectors is not None and vectors.has_vectors(ref, model_name):
+    return ref, None
+  return ref, submit_webhook(ref, webhook_url, webhook_retries, webhook_backoff)
+
+
 @click.command()
 @click.option(
     "--object-uri",
@@ -174,22 +187,52 @@ def ingest(
           timeout=settings.qdrant_timeout_s,
       )
     progress = tqdm(total=len(refs), desc="Submitting", unit="file") if show_progress else None
+    executor = ThreadPoolExecutor(max_workers=workers)
+    pending = {
+        executor.submit(
+            _check_and_submit_webhook,
+            ref,
+            vectors,
+            settings.model_name,
+            webhook_url,
+            webhook_retries,
+            webhook_backoff,
+        ): ref
+        for ref in refs[:workers]
+    }
+    remaining_refs = iter(refs[workers:])
     try:
-      for ref in refs:
-        if vectors is not None and vectors.has_vectors(ref, settings.model_name):
+      while pending:
+        completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+        for future in completed:
+          ref = pending.pop(future)
+          _, job_id = future.result()
+          try:
+            next_ref = next(remaining_refs)
+          except StopIteration:
+            pass
+          else:
+            pending[executor.submit(
+                _check_and_submit_webhook,
+                next_ref,
+                vectors,
+                settings.model_name,
+                webhook_url,
+                webhook_retries,
+                webhook_backoff,
+            )] = next_ref
+          if job_id is None:
+            if progress is None:
+              click.echo(f"{ref.uri}: skipped, vectors already exist")
+            else:
+              progress.update(1)
+            continue
           if progress is None:
-            click.echo(f"{ref.uri}: skipped, vectors already exist")
+            click.echo(f"{ref.uri}: submitted job {job_id}")
           else:
             progress.update(1)
-          continue
-        job_id = submit_webhook(
-            ref, webhook_url, webhook_retries, webhook_backoff
-        )
-        if progress is None:
-          click.echo(f"{ref.uri}: submitted job {job_id}")
-        else:
-          progress.update(1)
     finally:
+      executor.shutdown(wait=True)
       if progress is not None:
         progress.close()
     return
