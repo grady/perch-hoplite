@@ -62,7 +62,10 @@ def load_audio_file(
     with filepath.open('rb') as f:
       sf = soundfile.SoundFile(file=f)
       audio = sf.read()
-      if target_sample_rate is not None:
+      if (
+          target_sample_rate is not None
+          and sf.samplerate != target_sample_rate
+      ):
         audio = librosa.resample(
             y=audio,
             orig_sr=sf.samplerate,
