@@ -56,12 +56,15 @@ class EmbeddingPipeline:
     return self.embed_audio(self.load_audio(path), ref)
 
   def load_audio(self, path: Path) -> np.ndarray:
-    return np.asarray(
+    audio = np.asarray(
         audio_io.load_audio_file(
         path, target_sample_rate=self.model.sample_rate, dtype="float32"
         ),
         dtype=np.float32,
     )
+    if audio.ndim == 2:
+      audio = audio[:, 0]
+    return audio
 
   def embed_audio(
       self, audio: np.ndarray, ref: S3ObjectRef

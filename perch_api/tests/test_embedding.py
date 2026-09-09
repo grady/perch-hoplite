@@ -75,6 +75,14 @@ class EmbeddingPipelineTest(unittest.TestCase):
     self.assertEqual(audio.dtype, np.float32)
     np.testing.assert_array_equal(audio, np.array([1, 2, 3], dtype=np.float32))
 
+  def test_load_audio_reduces_multichannel_audio_to_one_channel(self):
+    with mock.patch("perch_api.embedding.audio_io.load_audio_file") as load_audio:
+      load_audio.return_value = np.array([[1, 10], [2, 20]], dtype=np.float32)
+
+      audio = self.pipeline.load_audio(pathlib.Path("stereo.wav"))
+
+    np.testing.assert_array_equal(audio, np.array([1, 2], dtype=np.float32))
+
   def test_embed_audio_creates_windows_with_timing(self):
     self.model.embed.return_value = SimpleNamespace(
         embeddings=np.array(
