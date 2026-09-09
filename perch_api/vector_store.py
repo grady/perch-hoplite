@@ -25,6 +25,14 @@ class VectorWrite:
   windows: tuple[EmbeddedWindow, ...]
 
 
+@dataclass
+class VectorDelete:
+  ref: S3ObjectRef
+  model_name: str
+  done: Event
+  error: list[Exception]
+
+
 class QdrantStore:
   def __init__(
       self,
@@ -104,6 +112,21 @@ class QdrantStore:
       )
     )
     return bool(records)
+
+  def delete(self, ref: S3ObjectRef, model_name: str) -> None:
+    """Deletes all vectors matching an object identity from Qdrant."""
+    if not self._collection_is_available():
+      return
+    selector = models.FilterSelector(
+        filter=models.Filter(must=self._identity_conditions(ref, model_name))
+    )
+    self._request(
+        lambda: self.client.delete(
+            collection_name=self.collection,
+            points_selector=selector,
+            wait=True,
+        )
+    )
 
   @staticmethod
   def _identity_conditions(ref: S3ObjectRef, model_name: str):
@@ -204,7 +227,7 @@ class VectorWriter:
     self._batch_size = batch_size
     self._on_write = on_write
     self._on_error = on_error
-    self._queue: Queue[VectorWrite] = Queue(maxsize=maxsize)
+    self._queue: Queue[VectorWrite | VectorDelete] = Queue(maxsize=maxsize)
     self._stop = Event()
     self._executor: ThreadPoolExecutor | None = None
     self._error: Exception | None = None
@@ -220,36 +243,58 @@ class VectorWriter:
       self._executor.submit(self._run)
     self._queue.put(VectorWrite(ref, model_name, tuple(windows)))
 
+  def delete(self, ref: S3ObjectRef, model_name: str) -> None:
+    """Deletes an object after all previously submitted writes complete."""
+    if self._executor is None:
+      self._executor = ThreadPoolExecutor(max_workers=1)
+      self._executor.submit(self._run)
+    command = VectorDelete(ref, model_name, Event(), [])
+    self._queue.put(command)
+    command.done.wait()
+    if command.error:
+      raise command.error[0]
+
   def _run(self) -> None:
     while not self._stop.is_set() or not self._queue.empty():
       try:
         write = self._queue.get(timeout=0.1)
       except Empty:
         continue
-      try:
-        count = self._store.upsert(
-            write.ref,
-            write.model_name,
-            write.windows,
-            batch_size=self._batch_size,
-        )
-        if self._on_write is not None:
-          self._on_write(write.ref, count)
-      except Exception as exc:
-        self._error = exc
-        if self._on_error is not None:
-          self._on_error(write.ref, exc)
-        while True:
-          try:
-            discarded = self._queue.get_nowait()
-          except Empty:
-            break
-          else:
-            if self._on_error is not None:
-              self._on_error(discarded.ref, exc)
-            self._queue.task_done()
-      finally:
-        self._queue.task_done()
+      if isinstance(write, VectorDelete):
+        try:
+          self._store.delete(write.ref, write.model_name)
+        except Exception as exc:
+          self._error = exc
+          write.error.append(exc)
+        finally:
+          write.done.set()
+      else:
+        try:
+          count = self._store.upsert(
+              write.ref,
+              write.model_name,
+              write.windows,
+              batch_size=self._batch_size,
+          )
+          if self._on_write is not None:
+            self._on_write(write.ref, count)
+        except Exception as exc:
+          self._error = exc
+          if self._on_error is not None:
+            self._on_error(write.ref, exc)
+          while True:
+            try:
+              discarded = self._queue.get_nowait()
+            except Empty:
+              break
+            else:
+              if isinstance(discarded, VectorDelete):
+                discarded.error.append(exc)
+                discarded.done.set()
+              elif self._on_error is not None:
+                self._on_error(discarded.ref, exc)
+              self._queue.task_done()
+      self._queue.task_done()
 
   def close(self) -> None:
     if self._executor is None:

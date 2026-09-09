@@ -23,17 +23,13 @@ _LOG = logging.getLogger(__name__)
 _LOG.setLevel(logging.INFO)
 
 
-def refs_from_event(event: dict[str, Any]) -> list[S3ObjectRef]:
+def _refs_from_event_type(
+    event: dict[str, Any], event_prefix: str
+) -> list[S3ObjectRef]:
   refs = []
   for record in event.get("Records", []):
     event_name = record.get("eventName", "")
-    if event_name.startswith("ObjectRemoved:"):
-      _LOG.info(
-          "S3 object deletion received; vector cleanup is not implemented: %s",
-          record.get("s3", {}).get("object", {}).get("key"),
-      )
-      continue
-    if not event_name.startswith("ObjectCreated:"):
+    if not event_name.startswith(event_prefix):
       continue
     s3 = record.get("s3", {})
     bucket = s3.get("bucket", {}).get("name")
@@ -48,6 +44,17 @@ def refs_from_event(event: dict[str, Any]) -> list[S3ObjectRef]:
               etag=obj.get("eTag"),
           )
       )
+  return refs
+
+
+def refs_from_event(event: dict[str, Any]) -> list[S3ObjectRef]:
+  return _refs_from_event_type(event, "ObjectCreated:")
+
+
+def removed_refs_from_event(event: dict[str, Any]) -> list[S3ObjectRef]:
+  refs = _refs_from_event_type(event, "ObjectRemoved:")
+  for ref in refs:
+    _LOG.info("S3 object deletion received; removing vectors: %s", ref.uri)
   return refs
 
 
@@ -82,6 +89,12 @@ class JobQueue:
     if self._dispatcher is None:
       self.start()
     return self._queue.enqueue(ref, self._service.pipeline.model_name)
+
+  def delete(self, ref: S3ObjectRef) -> None:
+    if self._dispatcher is None:
+      self.start()
+    self._queue.tombstone(ref)
+    self._writer.delete(ref, self._service.pipeline.model_name)
 
   def start(self) -> None:
     """Loads the embedding service and starts the worker thread."""
@@ -128,8 +141,13 @@ class JobQueue:
         job = pending.pop(future)
         try:
           _LOG.info("Starting embedding job for %s", job.ref.identity)
-          windows = self._service.pipeline.embed_audio(future.result(), job.ref)
-          self._writer.submit(job.ref, job.model_name, windows)
+          audio = future.result()
+          if self._queue.is_tombstoned(job.ref):
+            _LOG.info("Skipping tombstoned embedding job for %s", job.ref.identity)
+            continue
+          windows = self._service.pipeline.embed_audio(audio, job.ref)
+          if not self._queue.is_tombstoned(job.ref):
+            self._writer.submit(job.ref, job.model_name, windows)
         except Exception as exc:
           self._fail_job(job.ref, exc)
 
@@ -190,10 +208,13 @@ def create_app(service: EmbeddingService | None = None) -> FastAPI:
   @api.post("/webhooks/s3", status_code=202)
   def s3_webhook(event: dict[str, Any]) -> dict[str, list[str]]:
     refs = refs_from_event(event)
-    if not refs:
+    removed_refs = removed_refs_from_event(event)
+    if not refs and not removed_refs:
       raise HTTPException(status_code=400, detail="No S3 objects found")
     try:
       job_ids = [queue.submit(ref) for ref in refs]
+      for ref in removed_refs:
+        queue.delete(ref)
     except (OSError, RuntimeError, ValueError) as exc:
       raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"job_ids": job_ids}

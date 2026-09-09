@@ -69,6 +69,7 @@ class SQLiteJobQueue:
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL,
             completed_at REAL,
+            cancelled INTEGER NOT NULL DEFAULT 0,
             UNIQUE(identity, model_name)
           )
           """
@@ -77,6 +78,22 @@ class SQLiteJobQueue:
           "CREATE INDEX IF NOT EXISTS embed_jobs_ready_idx "
           "ON embed_jobs(status, available_at)"
       )
+      connection.execute(
+          """
+          CREATE TABLE IF NOT EXISTS embed_tombstones (
+            uri TEXT PRIMARY KEY,
+            created_at REAL NOT NULL
+          )
+          """
+      )
+      columns = {
+          row["name"]
+          for row in connection.execute("PRAGMA table_info(embed_jobs)")
+      }
+      if "cancelled" not in columns:
+        connection.execute(
+            "ALTER TABLE embed_jobs ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0"
+        )
 
   @staticmethod
   def _job_id(ref: S3ObjectRef, model_name: str) -> str:
@@ -103,13 +120,17 @@ class SQLiteJobQueue:
     now = time.time()
     job_id = self._job_id(ref, model_name)
     with self._connect() as connection:
+      connection.execute("DELETE FROM embed_tombstones WHERE uri = ?", (ref.uri,))
       connection.execute(
           """
           INSERT INTO embed_jobs (
             job_id, identity, bucket, object_key, version_id, etag, model_name,
             status, available_at, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)
-          ON CONFLICT(identity, model_name) DO NOTHING
+          ON CONFLICT(identity, model_name) DO UPDATE SET
+            status = 'PENDING', available_at = excluded.available_at,
+            updated_at = excluded.updated_at, error = NULL, cancelled = 0
+          WHERE embed_jobs.cancelled = 1
           """,
           (
               job_id,
@@ -151,6 +172,12 @@ class SQLiteJobQueue:
           """
           SELECT * FROM embed_jobs
           WHERE status = 'PENDING' AND available_at <= ?
+            AND cancelled = 0
+            AND NOT EXISTS (
+              SELECT 1 FROM embed_tombstones AS tombstone
+              WHERE tombstone.uri =
+                's3://' || embed_jobs.bucket || '/' || embed_jobs.object_key
+            )
           ORDER BY created_at, job_id
           LIMIT ?
           """,
@@ -183,6 +210,31 @@ class SQLiteJobQueue:
             )
         )
     return claimed
+
+  def tombstone(self, ref: S3ObjectRef, now: float | None = None) -> int:
+    """Prevents queued jobs for an object URI from producing vectors."""
+    now = time.time() if now is None else now
+    with self._connect() as connection:
+      connection.execute(
+          "INSERT OR REPLACE INTO embed_tombstones (uri, created_at) VALUES (?, ?)",
+          (ref.uri, now),
+      )
+      result = connection.execute(
+          """
+          UPDATE embed_jobs
+          SET cancelled = 1, updated_at = ?, error = 'Cancelled after object removal'
+          WHERE bucket = ? AND object_key = ? AND cancelled = 0
+          """,
+          (now, ref.bucket, ref.key),
+      )
+      return result.rowcount
+
+  def is_tombstoned(self, ref: S3ObjectRef) -> bool:
+    with self._connect() as connection:
+      row = connection.execute(
+          "SELECT 1 FROM embed_tombstones WHERE uri = ?", (ref.uri,)
+      ).fetchone()
+    return row is not None
 
   def complete(self, job_id: str, now: float | None = None) -> None:
     now = time.time() if now is None else now

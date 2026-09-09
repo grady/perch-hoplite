@@ -51,6 +51,24 @@ class SQLiteJobQueueTest(unittest.TestCase):
     self.assertEqual(restarted.recover_stale(now=now + 11), 1)
     self.assertEqual(restarted.claim(1, now=now + 12)[0].job_id, job_id)
 
+  def test_tombstone_cancels_matching_jobs_and_blocks_claims(self):
+    queue = SQLiteJobQueue(self.path)
+    job_id = queue.enqueue(self.ref, "perch_v2")
+
+    self.assertEqual(queue.tombstone(self.ref), 1)
+    self.assertTrue(queue.is_tombstoned(self.ref))
+    self.assertEqual(queue.claim(1), [])
+    self.assertEqual(queue.get(job_id).error, "Cancelled after object removal")
+
+  def test_enqueue_clears_tombstone_for_recreated_object(self):
+    queue = SQLiteJobQueue(self.path)
+    queue.tombstone(self.ref)
+
+    queue.enqueue(self.ref, "perch_v2")
+
+    self.assertFalse(queue.is_tombstoned(self.ref))
+    self.assertEqual(len(queue.claim(1)), 1)
+
 
 if __name__ == "__main__":
   unittest.main()

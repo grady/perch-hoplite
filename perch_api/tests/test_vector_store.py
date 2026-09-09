@@ -43,6 +43,26 @@ class QdrantStoreTest(unittest.TestCase):
         ["source", "model", "etag", "complete"],
     )
 
+  def test_delete_removes_vectors_matching_identity(self):
+    self.client.collection_exists.return_value = True
+
+    self.store.delete(self.ref, "perch_v2")
+
+    request = self.client.delete.call_args.kwargs
+    self.assertEqual(request["collection_name"], "embeddings")
+    self.assertTrue(request["wait"])
+    conditions = request["points_selector"].filter.must
+    self.assertEqual(
+        [condition.key for condition in conditions], ["source", "model", "etag"]
+    )
+
+  def test_delete_does_not_touch_missing_collection(self):
+    self.client.collection_exists.return_value = False
+
+    self.store.delete(self.ref, "perch_v2")
+
+    self.client.delete.assert_not_called()
+
   def test_upsert_batches_points_as_complete_without_payload_overwrite(self):
     self.client.collection_exists.return_value = False
     windows = [
@@ -128,6 +148,23 @@ class QdrantStoreTest(unittest.TestCase):
 
 
 class VectorWriterTest(unittest.TestCase):
+  def test_delete_waits_for_prior_write(self):
+    store = mock.MagicMock()
+    writer = VectorWriter(store)
+    ref = S3ObjectRef("audio", "bird.wav")
+
+    writer.submit(ref, "perch_v2", [])
+    writer.delete(ref, "perch_v2")
+    writer.close()
+
+    self.assertEqual(
+      store.method_calls,
+        [
+        mock.call.upsert(ref, "perch_v2", (), batch_size=256),
+        mock.call.delete(ref, "perch_v2"),
+        ],
+    )
+
   def test_close_drains_queue_and_calls_callback(self):
     store = mock.MagicMock()
     store.upsert.return_value = 2

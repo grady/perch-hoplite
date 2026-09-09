@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from perch_api.app import JobQueue, refs_from_event
+from perch_api.app import JobQueue, refs_from_event, removed_refs_from_event
 from perch_api.job_queue import SQLiteJobQueue
 from perch_api.storage import S3ObjectRef
 
@@ -85,9 +85,9 @@ class AppTest(unittest.TestCase):
         refs, [S3ObjectRef("audio", "folder/bird call.wav", version_id="v1")]
     )
 
-  def test_refs_from_event_logs_and_skips_deleted_objects(self):
+  def test_removed_refs_from_event_logs_deleted_objects(self):
     with self.assertLogs("perch_api.app", level="INFO") as logs:
-      refs = refs_from_event(
+      refs = removed_refs_from_event(
           {
               "Records": [
                   {
@@ -101,8 +101,8 @@ class AppTest(unittest.TestCase):
           }
       )
 
-    self.assertEqual(refs, [])
-    self.assertIn("S3 object deletion received", logs.output[0])
+    self.assertEqual(refs, [S3ObjectRef("audio", "folder/bird.wav")])
+    self.assertIn("S3 object deletion received; removing vectors", logs.output[0])
 
   def test_submit_is_not_limited_by_worker_buffer_size(self):
     service = SimpleNamespace(pipeline=SimpleNamespace(model_name="perch_v2"))
@@ -118,6 +118,20 @@ class AppTest(unittest.TestCase):
       second = S3ObjectRef("audio", "two.wav")
       self.assertEqual(queue.submit(first), JobQueue.job_id(first))
       self.assertEqual(queue.submit(second), JobQueue.job_id(second))
+
+    def test_delete_removes_vectors_for_object(self):
+        service = SimpleNamespace(pipeline=SimpleNamespace(model_name="perch_v2"))
+        queue = JobQueue(lambda: service)
+        queue._service = service
+        queue._dispatcher = mock.Mock()
+        queue._queue = mock.Mock()
+        queue._writer = mock.Mock()
+        ref = S3ObjectRef("audio", "bird.wav", version_id="v1")
+
+        queue.delete(ref)
+
+        queue._queue.tombstone.assert_called_once_with(ref)
+        queue._writer.delete.assert_called_once_with(ref, "perch_v2")
 
   def test_close_waits_for_dispatcher_and_loader(self):
     queue = JobQueue(lambda: mock.sentinel.service)
