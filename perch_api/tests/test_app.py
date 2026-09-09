@@ -133,6 +133,16 @@ class AppTest(unittest.TestCase):
         queue._queue.tombstone.assert_called_once_with(ref)
         queue._writer.delete.assert_called_once_with(ref, "perch_v2")
 
+    def test_retry_failed_requeues_jobs(self):
+        service = SimpleNamespace(pipeline=SimpleNamespace(model_name="perch_v2"))
+        queue = JobQueue(lambda: service)
+        queue._dispatcher = mock.Mock()
+        queue._queue = mock.Mock()
+        queue._queue.retry_failed.return_value = 7
+
+        self.assertEqual(queue.retry_failed(), 7)
+        queue._queue.retry_failed.assert_called_once_with()
+
   def test_close_waits_for_dispatcher_and_loader(self):
     queue = JobQueue(lambda: mock.sentinel.service)
     queue._dispatcher = mock.Mock()

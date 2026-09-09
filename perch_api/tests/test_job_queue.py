@@ -51,6 +51,25 @@ class SQLiteJobQueueTest(unittest.TestCase):
     self.assertEqual(restarted.recover_stale(now=now + 11), 1)
     self.assertEqual(restarted.claim(1, now=now + 12)[0].job_id, job_id)
 
+  def test_retry_failed_requeues_failed_jobs_and_skips_cancelled_jobs(self):
+    queue = SQLiteJobQueue(self.path, max_attempts=1)
+    failed_id = queue.enqueue(self.ref, "perch_v2")
+    queue.claim(1)
+    queue.fail(failed_id, "failed")
+
+    cancelled_ref = S3ObjectRef("audio", "deleted.wav")
+    cancelled_id = queue.enqueue(cancelled_ref, "perch_v2")
+    queue.claim(1)
+    queue.fail(cancelled_id, "failed")
+    queue.tombstone(cancelled_ref)
+
+    self.assertEqual(queue.retry_failed(now=123.0), 1)
+    retried = queue.get(failed_id)
+    self.assertEqual(retried.status, "PENDING")
+    self.assertEqual(retried.attempts, 0)
+    self.assertIsNone(retried.error)
+    self.assertEqual(queue.get(cancelled_id).status, "FAILED")
+
   def test_tombstone_cancels_matching_jobs_and_blocks_claims(self):
     queue = SQLiteJobQueue(self.path)
     job_id = queue.enqueue(self.ref, "perch_v2")

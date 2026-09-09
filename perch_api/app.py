@@ -96,6 +96,11 @@ class JobQueue:
     self._queue.tombstone(ref)
     self._writer.delete(ref, self._service.pipeline.model_name)
 
+  def retry_failed(self) -> int:
+    if self._dispatcher is None:
+      self.start()
+    return self._queue.retry_failed()
+
   def start(self) -> None:
     """Loads the embedding service and starts the worker thread."""
     if self._dispatcher is not None:
@@ -218,6 +223,13 @@ def create_app(service: EmbeddingService | None = None) -> FastAPI:
     except (OSError, RuntimeError, ValueError) as exc:
       raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"job_ids": job_ids}
+
+  @api.post("/admin/jobs/retry-failed", status_code=202)
+  def retry_failed_jobs() -> dict[str, int]:
+    try:
+      return {"requeued": queue.retry_failed()}
+    except (OSError, RuntimeError, ValueError) as exc:
+      raise HTTPException(status_code=503, detail=str(exc)) from exc
 
   return api
 

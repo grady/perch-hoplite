@@ -161,6 +161,25 @@ class SQLiteJobQueue:
       )
       return result.rowcount
 
+  def retry_failed(self, now: float | None = None) -> int:
+    now = time.time() if now is None else now
+    with self._connect() as connection:
+      result = connection.execute(
+          """
+          UPDATE embed_jobs
+          SET status = 'PENDING', attempts = 0, available_at = ?,
+              lease_until = NULL, updated_at = ?, error = NULL
+          WHERE status = 'FAILED' AND cancelled = 0
+            AND NOT EXISTS (
+              SELECT 1 FROM embed_tombstones AS tombstone
+              WHERE tombstone.uri =
+                's3://' || embed_jobs.bucket || '/' || embed_jobs.object_key
+            )
+          """,
+          (now, now),
+      )
+      return result.rowcount
+
   def claim(self, limit: int, now: float | None = None) -> list[Job]:
     if limit < 1:
       return []
