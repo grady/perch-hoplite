@@ -26,6 +26,15 @@ _LOG.setLevel(logging.INFO)
 def refs_from_event(event: dict[str, Any]) -> list[S3ObjectRef]:
   refs = []
   for record in event.get("Records", []):
+    event_name = record.get("eventName", "")
+    if event_name.startswith("ObjectRemoved:"):
+      _LOG.info(
+          "S3 object deletion received; vector cleanup is not implemented: %s",
+          record.get("s3", {}).get("object", {}).get("key"),
+      )
+      continue
+    if not event_name.startswith("ObjectCreated:"):
+      continue
     s3 = record.get("s3", {})
     bucket = s3.get("bucket", {}).get("name")
     obj = s3.get("object", {})

@@ -17,6 +17,7 @@ class AppTest(unittest.TestCase):
         {
             "Records": [
                 {
+                    "eventName": "ObjectCreated:Put",
                     "s3": {
                         "bucket": {"name": "audio"},
                         "object": {"key": "folder%2Fbird.wav", "eTag": "abc"},
@@ -41,9 +42,21 @@ class AppTest(unittest.TestCase):
     refs = refs_from_event(
         {
             "Records": [
-                {"s3": {"bucket": {"name": "audio"}, "object": {}}},
-                {"s3": {"bucket": {}, "object": {"key": "bird.wav"}}},
-                {"s3": {"bucket": {"name": "audio"}, "object": {"key": "ok.wav"}}},
+                {
+                    "eventName": "ObjectCreated:Put",
+                    "s3": {"bucket": {"name": "audio"}, "object": {}},
+                },
+                {
+                    "eventName": "ObjectCreated:Put",
+                    "s3": {"bucket": {}, "object": {"key": "bird.wav"}},
+                },
+                {
+                    "eventName": "ObjectCreated:Put",
+                    "s3": {
+                        "bucket": {"name": "audio"},
+                        "object": {"key": "ok.wav"},
+                    },
+                },
             ]
         }
     )
@@ -55,6 +68,7 @@ class AppTest(unittest.TestCase):
         {
             "Records": [
                 {
+                    "eventName": "ObjectCreated:CompleteMultipartUpload",
                     "s3": {
                         "bucket": {"name": "audio"},
                         "object": {
@@ -70,6 +84,25 @@ class AppTest(unittest.TestCase):
     self.assertEqual(
         refs, [S3ObjectRef("audio", "folder/bird call.wav", version_id="v1")]
     )
+
+  def test_refs_from_event_logs_and_skips_deleted_objects(self):
+    with self.assertLogs("perch_api.app", level="INFO") as logs:
+      refs = refs_from_event(
+          {
+              "Records": [
+                  {
+                      "eventName": "ObjectRemoved:Delete",
+                      "s3": {
+                          "bucket": {"name": "audio"},
+                          "object": {"key": "folder%2Fbird.wav"},
+                      },
+                  }
+              ]
+          }
+      )
+
+    self.assertEqual(refs, [])
+    self.assertIn("S3 object deletion received", logs.output[0])
 
   def test_submit_is_not_limited_by_worker_buffer_size(self):
     service = SimpleNamespace(pipeline=SimpleNamespace(model_name="perch_v2"))
