@@ -94,8 +94,24 @@ class S3StorageTest(unittest.TestCase):
       with mock.patch("perch_api.storage.boto3.client") as client:
         storage = S3Storage()
 
-    client.assert_called_once_with("s3", endpoint_url="http://s3.test")
+    client.assert_called_once_with(
+        "s3",
+        endpoint_url="http://s3.test",
+        config=mock.ANY,
+    )
+    self.assertEqual(client.call_args.kwargs["config"].max_pool_connections, 50)
     self.assertIs(storage.client, client.return_value)
+
+  def test_default_client_pool_size_is_configurable(self):
+    with mock.patch.dict(
+        os.environ,
+        {"PERCH_API_S3_MAX_POOL_CONNECTIONS": "80"},
+        clear=False,
+    ):
+      with mock.patch("perch_api.storage.boto3.client") as client:
+        S3Storage()
+
+    self.assertEqual(client.call_args.kwargs["config"].max_pool_connections, 80)
 
 
 if __name__ == "__main__":

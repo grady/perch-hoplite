@@ -11,6 +11,7 @@ from typing import Iterator, Generator
 from urllib.parse import urlparse
 
 import boto3
+from botocore.config import Config
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,14 @@ class S3Storage:
   def __init__(self, client=None):
     if client is None:
       endpoint_url = os.getenv("AWS_ENDPOINT_URL_S3")
-      client = boto3.client("s3", endpoint_url=endpoint_url)
+      max_pool_connections = int(
+          os.getenv("PERCH_API_S3_MAX_POOL_CONNECTIONS", "50")
+      )
+      client = boto3.client(
+          "s3",
+          endpoint_url=endpoint_url,
+          config=Config(max_pool_connections=max_pool_connections),
+      )
     self.client = client
 
   def list(self, bucket: str, prefix: str = "") -> Iterator[S3ObjectRef]:
