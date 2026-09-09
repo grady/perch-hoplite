@@ -48,9 +48,14 @@ def timestamp_from_filename(path: str | Path) -> datetime.datetime | None:
 
 
 class EmbeddingPipeline:
-  def __init__(self, model_name: str = "perch_v2", model=None):
+  def __init__(
+      self, model_name: str = "perch_v2", model=None, inference_chunk_s: float = 60.0
+  ):
+    if inference_chunk_s <= 0:
+      raise ValueError("inference_chunk_s must be positive")
     self.model_name = model_name
     self.model = model or model_configs.load_model_by_name(model_name)
+    self.inference_chunk_s = inference_chunk_s
 
   def embed_file(self, path: Path, ref: S3ObjectRef) -> list[EmbeddedWindow]:
     return self.embed_audio(self.load_audio(path), ref)
@@ -69,16 +74,28 @@ class EmbeddingPipeline:
   def embed_audio(
       self, audio: np.ndarray, ref: S3ObjectRef
   ) -> list[EmbeddedWindow]:
-    outputs = self.model.embed(audio)
-    if outputs.embeddings is None:
-      raise ValueError(f"Model {self.model_name!r} did not return embeddings")
-    embeddings = np.asarray(outputs.embeddings)
-    if embeddings.ndim != 3:
-      raise ValueError(
-          f"Expected [frames, channels, features], got {embeddings.shape}"
-      )
     window_size_s = float(getattr(self.model, "window_size_s", 5.0))
     hop_size_s = float(getattr(self.model, "hop_size_s", window_size_s))
+    sample_rate = self.model.sample_rate
+    chunk_samples = max(1, int(self.inference_chunk_s * sample_rate))
+    overlap_samples = max(0, int((window_size_s - hop_size_s) * sample_rate))
+    step_samples = max(1, chunk_samples - overlap_samples)
+    hop_samples = max(1, int(hop_size_s * sample_rate))
+    frame_embeddings: dict[int, np.ndarray] = {}
+    for start in range(0, len(audio), step_samples):
+      chunk = audio[start : start + chunk_samples]
+      outputs = self.model.embed(chunk)
+      if outputs.embeddings is None:
+        raise ValueError(f"Model {self.model_name!r} did not return embeddings")
+      embeddings = np.asarray(outputs.embeddings)
+      if embeddings.ndim != 3:
+        raise ValueError(
+            f"Expected [frames, channels, features], got {embeddings.shape}"
+        )
+      first_frame = round(start / hop_samples)
+      for frame_index, frame in enumerate(embeddings):
+        frame_embeddings.setdefault(first_frame + frame_index, frame)
+    embeddings_by_frame = sorted(frame_embeddings.items())
     recording_time = timestamp_from_filename(ref.key)
     return [
         EmbeddedWindow(
@@ -102,6 +119,6 @@ class EmbeddingPipeline:
                 else None
             ),
         )
-        for frame_index, frame in enumerate(embeddings)
+        for frame_index, frame in embeddings_by_frame
         for channel_index, vector in enumerate(frame)
     ]

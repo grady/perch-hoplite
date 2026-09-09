@@ -14,6 +14,7 @@ class Settings:
   qdrant_collection: str = "perch_embeddings"
   qdrant_timeout_s: float = 30.0
   upsert_batch_size: int = 256
+  inference_chunk_s: float = 60.0
   job_workers: int = 4
   job_database_path: str = "./perch_api_jobs.sqlite3"
   job_max_attempts: int = 3
@@ -34,6 +35,9 @@ class Settings:
         ),
         upsert_batch_size=int(
             os.getenv("PERCH_API_UPSERT_BATCH_SIZE", str(cls.upsert_batch_size))
+        ),
+        inference_chunk_s=float(
+            os.getenv("PERCH_API_INFERENCE_CHUNK_S", str(cls.inference_chunk_s))
         ),
         job_workers=int(
             os.getenv("PERCH_API_JOB_WORKERS", str(cls.job_workers))

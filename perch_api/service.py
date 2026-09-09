@@ -24,7 +24,9 @@ class EmbeddingService:
     settings = Settings.from_env()
     return cls(
         storage=S3Storage(),
-        pipeline=EmbeddingPipeline(settings.model_name),
+      pipeline=EmbeddingPipeline(
+        settings.model_name, inference_chunk_s=settings.inference_chunk_s
+      ),
         vectors=QdrantStore(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key,
