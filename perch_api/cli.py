@@ -20,6 +20,7 @@ from perch_api.vector_store import QdrantStore, VectorWriter
 def _s3_event(ref: S3ObjectRef) -> dict:
   return {
       "Records": [{
+        "eventName": "ObjectCreated:Put",
           "s3": {
               "bucket": {"name": ref.bucket},
               "object": {

@@ -21,6 +21,7 @@ class WebhookSubmissionTest(unittest.TestCase):
         _s3_event(ref),
         {
             "Records": [{
+            "eventName": "ObjectCreated:Put",
                 "s3": {
                     "bucket": {"name": "audio"},
                     "object": {
