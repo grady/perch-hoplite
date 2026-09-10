@@ -28,7 +28,7 @@ def _refs_from_event_type(
 ) -> list[S3ObjectRef]:
   refs = []
   for record in event.get("Records", []):
-    event_name = record.get("eventName", "")
+    event_name = record.get("eventName", "").removeprefix("s3:")
     if not event_name.startswith(event_prefix):
       continue
     s3 = record.get("s3", {})

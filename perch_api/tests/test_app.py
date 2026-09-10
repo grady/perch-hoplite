@@ -30,6 +30,23 @@ class AppTest(unittest.TestCase):
     self.assertEqual(refs[0].key, "folder/bird.wav")
     self.assertEqual(refs[0].etag, "abc")
 
+  def test_refs_from_minio_event_accepts_s3_event_prefix(self):
+    refs = refs_from_event(
+        {
+            "Records": [
+                {
+                    "eventName": "s3:ObjectCreated:Put",
+                    "s3": {
+                        "bucket": {"name": "audio"},
+                        "object": {"key": "bird.wav"},
+                    },
+                }
+            ]
+        }
+    )
+
+    self.assertEqual(refs, [S3ObjectRef("audio", "bird.wav")])
+
   def test_job_id_is_stable_for_object_identity(self):
     first = S3ObjectRef("audio", "bird.wav", etag="abc")
     second = S3ObjectRef("audio", "bird.wav", etag="abc")
